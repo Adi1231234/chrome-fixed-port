@@ -22,16 +22,22 @@ $runPs1 = Join-Path $appDir 'run.ps1'
 Write-Host "Downloading chrome-fixed-port ($repo@$branch)..." -ForegroundColor Cyan
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$repo/$branch/run.ps1" -OutFile $runPs1 -UseBasicParsing
 
-# Register (or update) a per-user task: at logon + every $everyMin minutes.
+# Register (or update) a task that runs ONLY in this user's own session: an
+# Interactive current-user principal (no stored password, no admin) plus a
+# logon trigger scoped to this user. An unscoped -AtLogOn means "any user" and
+# needs elevation - that is what fails with Access denied from a normal shell.
+$me = "$env:USERDOMAIN\$env:USERNAME"
 $action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runPs1`""
-$atLogon = New-ScheduledTaskTrigger -AtLogOn
+$atLogon = New-ScheduledTaskTrigger -AtLogOn -User $me
 $repeat  = New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes $everyMin)
+$principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName $task -Action $action -Trigger @($atLogon, $repeat) `
-    -Settings $settings -Description 'Keep every Chrome launch on a fixed remote-debugging port' -Force | Out-Null
+    -Principal $principal -Settings $settings `
+    -Description 'Keep every Chrome launch on a fixed remote-debugging port' -Force | Out-Null
 Write-Host "Registered scheduled task '$task' (every $everyMin min + at logon)." -ForegroundColor Green
 
 # Run once now so the wrapper is applied immediately.

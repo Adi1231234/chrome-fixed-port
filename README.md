@@ -1,8 +1,33 @@
-# chrome-fixed-port
+<div align="center">
 
-Keeps **every** Chrome launch opening with `--remote-debugging-port=9225` (on a
-separate `ChromeDebug` profile), by replacing `chrome.exe` with a tiny wrapper.
-[run.ps1](run.ps1) is meant to be run periodically by a scheduled task.
+# 🔌 chrome-fixed-port
+
+**Keeps _every_ Chrome launch opening with `--remote-debugging-port=9225` (on a separate `ChromeDebug` profile) - update-safe, so a Chrome self-update can never cause the version skew that crashes new tabs.**
+
+![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
+![PowerShell](https://img.shields.io/badge/PowerShell-5391FE?logo=powershell&logoColor=white)
+![Browser](https://img.shields.io/badge/Google%20Chrome-4285F4?logo=googlechrome&logoColor=white)
+![Update-safe](https://img.shields.io/badge/rides%20Google's%20own%20swap-2ea44f)
+![Install](https://img.shields.io/badge/install-one%20line-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+<sub>Replaces <code>chrome.exe</code> with a tiny wrapper that launches the genuine binary + the debug flag · never overwrites the binary a running browser uses · idempotent, safe to re-run.</sub>
+
+</div>
+
+---
+
+Replaces `chrome.exe` with a tiny wrapper so the remote-debugging port is **always** on, without the [version-skew crash](#the-problem-this-solves) that a naive approach causes. [run.ps1](run.ps1) does the work and is meant to run periodically from a scheduled task.
+
+## ⚡ Quick start
+
+One line in **PowerShell** - no clone, no git required:
+
+```powershell
+irm https://raw.githubusercontent.com/Adi1231234/chrome-fixed-port/main/install.ps1 | iex
+```
+
+It downloads `run.ps1` to `%LOCALAPPDATA%\chrome-fixed-port`, registers a per-user scheduled task (**every 30 min + at logon**), and runs it once now. **Idempotent** - re-run any time; the task is re-registered in place. Then, the first time only, **close and reopen Chrome once** so Google's swap promotes the wrapper. *(Cloned the repo instead? Just run `./run.ps1` and wire it to your own scheduled task.)*
 
 ## The problem this solves
 

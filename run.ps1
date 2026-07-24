@@ -74,7 +74,7 @@ class Wrapper {
 '@
 
 # Compile the wrapper in a throwaway temp dir; returns @{Exe; Tmp}. Caller removes Tmp.
-function Build-Wrapper {
+function New-Wrapper {
   $tmp = Join-Path $env:TEMP ('cw_' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   $cs = Join-Path $tmp 'w.cs'; Set-Content -Path $cs -Value $wrapperSrc -Encoding UTF8
@@ -87,7 +87,7 @@ function Build-Wrapper {
 
 # Move a genuine launcher at $path into chrome_real_<ver>.exe (immutable per version),
 # or just drop $path if that version is already stored. Never overwrites an existing copy.
-function Stash-Genuine($path) {
+function Save-Genuine($path) {
   $v = (Get-Item $path).VersionInfo.FileVersion
   $target = Join-Path $dir "chrome_real_$v.exe"
   try {
@@ -100,15 +100,11 @@ Log "=== apply start (chrome fixed-port wrapper) user=$env:USERNAME dir=$dir ===
 $code = 0; $wrap = $null
 try {
   if (-not (Test-Path $dir)) { throw "Application dir not found: $dir" }
-  $wrap = Build-Wrapper
-
-  # STEP 0: migrate a legacy fixed-name chrome_real.exe into the versioned scheme
-  $legacy = Join-Path $dir 'chrome_real.exe'
-  if ((Test-Path $legacy) -and (Test-Google $legacy) -and -not (Test-Locked $legacy)) { Stash-Genuine $legacy }
+  $wrap = New-Wrapper
 
   # STEP 1: ride Google's swap - prime new_chrome.exe with our wrapper so Google promotes it
   if ((Test-Path $newChrome) -and (Test-Google $newChrome)) {
-    Stash-Genuine $newChrome
+    Save-Genuine $newChrome
     Copy-Item $wrap.Exe $newChrome -Force
     Log "primed new_chrome.exe with wrapper (rides Google's next swap)" 'ACT'
   }
@@ -118,7 +114,7 @@ try {
   if (-not (Test-Path $exe)) { $needInstall = $true }
   elseif (Test-Google $exe) {                                   # missed the window: Google put genuine here
     if (Test-Locked $exe) { Log "chrome.exe is genuine but locked by a running browser - deferring to next run" 'WARN' }
-    else { Stash-Genuine $exe; $needInstall = $true; Log "chrome.exe was genuine (missed swap window) - reinstalling wrapper" 'ACT' }
+    else { Save-Genuine $exe; $needInstall = $true; Log "chrome.exe was genuine (missed swap window) - reinstalling wrapper" 'ACT' }
   }
   elseif ((-not (Test-Path $marker)) -or ((Get-Content $marker -ErrorAction SilentlyContinue) -ne $WRAPPER_VER)) { $needInstall = $true }
   if ($needInstall) {

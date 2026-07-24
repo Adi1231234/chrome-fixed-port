@@ -7,8 +7,9 @@ so the structure and the safety guarantees stay intact.
 
 ## Layout
 
-- **`install.ps1`** - one-line bootstrap: downloads `run.ps1` to a stable dir,
-  registers a per-user scheduled task, runs once. Users never edit this.
+- **`install.ps1`** - one-line bootstrap: downloads `run.ps1` to a temp folder,
+  runs it once, cleans up. No scheduling - the user wires their own timer. Users
+  never edit this.
 - **`run.ps1`** - the whole tool, one self-contained script. Compiles the wrapper,
   applies it, and cleans up. It is meant to run periodically from a scheduled task.
 - **`README.md`** - user-facing write-up: the problem, the design, the proof.

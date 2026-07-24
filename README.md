@@ -27,7 +27,7 @@ One line in **PowerShell** - no clone, no git required:
 irm https://raw.githubusercontent.com/Adi1231234/chrome-fixed-port/main/install.ps1 | iex
 ```
 
-It downloads `run.ps1` to `%LOCALAPPDATA%\chrome-fixed-port`, registers a per-user scheduled task (**every 30 min + at logon**), and runs it once now. **Idempotent** - re-run any time; the task is re-registered in place. Then, the first time only, **close and reopen Chrome once** so Google's swap promotes the wrapper. *(Cloned the repo instead? Just run `./run.ps1` and wire it to your own scheduled task.)*
+It downloads `run.ps1` to a temp folder, runs it once, and cleans up. **Idempotent** - safe to re-run any time. Then, the first time only, **close and reopen Chrome once** so Google's swap promotes the wrapper. To keep it applied across Chrome updates, **run it periodically from your own scheduled task** (it is meant to run on a timer). *(Cloned the repo instead? Just run `./run.ps1`.)*
 
 ## The problem this solves
 

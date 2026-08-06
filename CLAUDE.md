@@ -20,7 +20,13 @@ so the structure and the safety guarantees stay intact.
   `chrome_real_<version>.exe` and runs it, injecting the debug flags. Keep it small;
   it must not read user paths from anything but `%LOCALAPPDATA%` / env overrides.
 - `New-Wrapper` - compiles `$wrapperSrc` with the .NET Framework `csc.exe` in a
-  throwaway temp dir. Caller removes the temp dir in `finally`.
+  throwaway temp dir, embedding Chrome's own icon via `-win32icon` (see
+  `$icoRipSrc` / `Export-ExeIcon`) so shortcuts that read `chrome.exe,0` still show
+  the Chrome icon. Caller removes the temp dir in `finally`.
+- `$icoRipSrc` / `Export-ExeIcon` - rebuild a multi-resolution `.ico` from the
+  genuine binary's first icon group (RT_GROUP_ICON + RT_ICON, the group name is a
+  wide string so it needs `EnumResourceNamesW`). Fail-safe: extraction failure just
+  yields an icon-less wrapper, never a failed run.
 - `Save-Genuine` - moves a genuine launcher into `chrome_real_<ver>.exe`, one
   **immutable copy per version**; never overwrites an existing copy.
 - `Test-Google` / `Test-Locked` - signature check and in-use check; the two guards

@@ -7,26 +7,30 @@ so the structure and the safety guarantees stay intact.
 
 ## Layout
 
-- **`install.ps1`** - one-line bootstrap: downloads `run.ps1` to a temp folder,
-  runs it once, cleans up. No scheduling - the user wires their own timer. Users
-  never edit this.
-- **`run.ps1`** - the whole tool, one self-contained script. Compiles the wrapper,
-  applies it, and cleans up. It is meant to run periodically from a scheduled task.
+- **`install.ps1`** - one-line bootstrap: downloads `run.ps1` + `lib/` to a temp
+  folder, runs it once, cleans up. No scheduling - the user wires their own timer.
+  Users never edit this.
+- **`run.ps1`** - the core tool: compiles the wrapper, applies it, cleans up. Runs
+  standalone; `lib/` only adds the icon. Meant to run periodically from a scheduled
+  task (keep `lib/` next to it).
+- **`lib/Get-ExeIcon.ps1`** - the one optional concern split out of `run.ps1`:
+  extracts Chrome's icon so the wrapper isn't icon-less. Dot-sourced if present.
 - **`README.md`** - user-facing write-up: the problem, the design, the proof.
 
-## The moving parts (all inside `run.ps1`)
+## The moving parts
 
-- `$wrapperSrc` - the C# wrapper source. On launch it finds the **newest**
-  `chrome_real_<version>.exe` and runs it, injecting the debug flags. Keep it small;
-  it must not read user paths from anything but `%LOCALAPPDATA%` / env overrides.
-- `New-Wrapper` - compiles `$wrapperSrc` with the .NET Framework `csc.exe` in a
-  throwaway temp dir, embedding Chrome's own icon via `-win32icon` (see
-  `$icoRipSrc` / `Export-ExeIcon`) so shortcuts that read `chrome.exe,0` still show
-  the Chrome icon. Caller removes the temp dir in `finally`.
-- `$icoRipSrc` / `Export-ExeIcon` - rebuild a multi-resolution `.ico` from the
-  genuine binary's first icon group (RT_GROUP_ICON + RT_ICON, the group name is a
-  wide string so it needs `EnumResourceNamesW`). Fail-safe: extraction failure just
-  yields an icon-less wrapper, never a failed run.
+- `$wrapperSrc` (in `run.ps1`) - the C# wrapper source. On launch it finds the
+  **newest** `chrome_real_<version>.exe` and runs it, injecting the debug flags. Keep
+  it small; it must not read user paths from anything but `%LOCALAPPDATA%` / env overrides.
+- `New-Wrapper` (in `run.ps1`) - compiles `$wrapperSrc` with the .NET Framework
+  `csc.exe` in a throwaway temp dir. If `lib/Get-ExeIcon.ps1` is loaded it calls
+  `Resolve-WrapperIcon` and compiles with `-win32icon` so shortcuts that read
+  `chrome.exe,0` show Chrome's icon; if not, it builds an icon-less wrapper. Caller
+  removes the temp dir in `finally`.
+- `lib/Get-ExeIcon.ps1` - `Export-ExeIcon` rebuilds a multi-resolution `.ico` from a
+  PE's first icon group (RT_GROUP_ICON + RT_ICON; the group name is a wide string, so
+  it needs `EnumResourceNamesW`); `Resolve-WrapperIcon` picks the genuine source exe
+  and extracts. Fail-safe: any failure yields an icon-less wrapper, never a failed run.
 - `Save-Genuine` - moves a genuine launcher into `chrome_real_<ver>.exe`, one
   **immutable copy per version**; never overwrites an existing copy.
 - `Test-Google` / `Test-Locked` - signature check and in-use check; the two guards

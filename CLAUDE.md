@@ -44,6 +44,22 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 - **The running browser never depends on Chrome's Application directory.** It runs
   from `%LOCALAPPDATA%\ChromeFixedPort\<version>\`. If a change reintroduces a
   dependency on Google's directory at browser runtime, it reintroduces the bug.
+- **Never mirror a version directory that cannot run.** Google's cleanup strips
+  everything it can and leaves the mapped `.dll` files behind, so a half-deleted
+  directory still *looks* populated - mirroring one reproduces the original bug
+  faithfully, and an empty directory yields a "complete" mirror of nothing.
+  `Test-VersionUsable` gates this on `$RequiredFiles`; `icudtl.dat` is the file
+  measured to be fatal.
+- **Only build what you keep.** Compute the keep set (newest servable version plus
+  anything with a live process) *before* syncing. Building a mirror the very same
+  run then prunes it is pure churn, and it never converges.
+- **Always leave one genuine launcher beside Chrome.** `chrome_real_<newest>.exe`
+  is hardlinked from the mirror, so it costs nothing and is the seed the mirror is
+  rebuilt from. Without it the mirror's own `chrome.exe` is the only genuine
+  launcher on the machine and losing it is unrecoverable.
+- **Flags are tokens, not substrings.** The wrapper must match an argument that
+  *starts with* a flag. A plain `IndexOf` lets a URL like
+  `https://x/?q=--type=renderer` masquerade as a flag and silently kill the port.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before

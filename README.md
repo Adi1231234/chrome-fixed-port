@@ -74,6 +74,18 @@ directory at all.
   own install stays excluded from its own cleanup instead of being purged as stray.
   An unstamped wrapper reports `0.0.0.0` and excludes nothing.
 
+## Why a mirror can be trusted
+
+A mirror is only marked complete once the source version directory actually
+contains what a renderer needs (`chrome.dll`, `icudtl.dat`). This matters because
+Google's cleanup deletes everything it can and leaves the mapped `.dll` files
+behind - so a half-purged directory still looks populated, and mirroring one would
+faithfully reproduce a browser that dies on every new tab.
+
+One genuine launcher, `chrome_real_<newest>.exe`, is kept beside Chrome, hardlinked
+from the mirror so it costs nothing. It is the seed the mirror is rebuilt from if
+the mirror is ever damaged or deleted.
+
 ## No file clutter
 
 `run.ps1` keeps the newest mirror plus any mirror with a live process, and deletes the

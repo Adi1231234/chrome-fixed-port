@@ -19,7 +19,24 @@ class Wrapper {
     if(cmd.StartsWith("\"")){int e=cmd.IndexOf('"',1);return e<0?"":cmd.Substring(e+1).TrimStart();}
     int s=cmd.IndexOfAny(new[]{' ','\t'}); return s<0?"":cmd.Substring(s+1).TrimStart();
   }
-  static bool Has(string h,string n){return h.IndexOf(n,StringComparison.OrdinalIgnoreCase)>=0;}
+  // Split a command line into arguments, honouring quotes.
+  static System.Collections.Generic.List<string> Tokens(string cmd){
+    var list=new System.Collections.Generic.List<string>(); var sb=new StringBuilder(); bool q=false;
+    foreach(char c in cmd){
+      if(c=='"'){ q=!q; continue; }
+      if(!q && (c==' '||c=='\t')){ if(sb.Length>0){ list.Add(sb.ToString()); sb.Length=0; } continue; }
+      sb.Append(c);
+    }
+    if(sb.Length>0) list.Add(sb.ToString());
+    return list;
+  }
+  // True only if some ARGUMENT starts with `flag`. A plain substring test would let
+  // a URL such as https://x/?q=--type=renderer masquerade as a flag and silently
+  // suppress the debug port.
+  static bool Has(string cmd,string flag){
+    foreach(var t in Tokens(cmd)) if(t.StartsWith(flag,StringComparison.OrdinalIgnoreCase)) return true;
+    return false;
+  }
   static string MirrorRoot(){
     string o=Environment.GetEnvironmentVariable("CHROME_FIXED_PORT_MIRROR");
     if(!string.IsNullOrEmpty(o)) return o;

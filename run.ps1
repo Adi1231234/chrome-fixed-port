@@ -7,7 +7,7 @@
 # check, so we never let a browser depend on a directory Google owns: it runs
 # from a private hardlink mirror instead. Root cause and proof: README.md.
 
-$WRAPPER_VER = '4'   # bump when $wrapperSrc changes, to force a reinstall
+$WRAPPER_VER = '5'   # bump when $wrapperSrc changes, to force a reinstall
 
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
 foreach ($m in 'Common', 'Wrapper', 'Mirror') { . (Join-Path $here "lib\$m.ps1") }
@@ -28,8 +28,7 @@ function Set-FileFresh($src, $dst) {
 }
 
 # Every genuine Chrome launcher we can currently see, as version -> path.
-# chrome_real_*.exe is the previous design's name, still honoured so an existing
-# install migrates into the mirror instead of losing its launcher.
+# chrome_real_*.exe is both the previous design's name and our rebuild seed.
 function Get-GenuineLaunchers($dir, $exe, $newChrome) {
   $found = @{}
   $cands = @($exe, $newChrome) + @(Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
@@ -49,33 +48,43 @@ try {
   if (-not (Test-Path $dir)) { throw "Application dir not found: $dir" }
   New-Item -ItemType Directory -Force -Path (Get-MirrorRoot) | Out-Null
 
-  # STEP 1: make sure every version we care about has a COMPLETE mirror, before
-  # anything overwrites a genuine launcher. Candidates are the genuine launchers
-  # still sitting in Chrome's directory PLUS any mirror we already have - in
-  # steady state Chrome's directory holds only our wrapper, so a damaged mirror
-  # can only be repaired from its own (genuine) launcher.
+  # STEP 1: work out what we can serve. Candidates are the genuine launchers still
+  # in Chrome's directory PLUS any mirror we already have - in steady state Chrome's
+  # directory holds only our wrapper, so a damaged mirror is repaired from its own
+  # (genuine) launcher.
   $targets = @{}
   foreach ($kv in (Get-GenuineLaunchers $dir $exe $newChrome).GetEnumerator()) { $targets[$kv.Key] = $kv.Value }
   foreach ($v in Get-MirrorVersions) {
     if ($targets.ContainsKey($v)) { continue }
-    $ml = Join-Path (Join-Path (Get-MirrorRoot) $v) 'chrome.exe'
+    $ml = Get-MirrorLauncher $v
     if (Test-Path $ml) { $targets[$v] = $ml }
   }
-  foreach ($kv in $targets.GetEnumerator()) {
-    if (Test-Mirror $kv.Key) { continue }
-    Log "mirror v$($kv.Key) missing or incomplete - (re)building" 'ACT'
-    Sync-Mirror $dir $kv.Key $kv.Value | Out-Null
+  # Servable = already mirrored and validated, or a source directory that can
+  # actually run a browser. A gutted or empty version directory is neither.
+  $servable = @($targets.Keys | Where-Object { (Test-Mirror $_) -or (Test-VersionUsable $dir $_) })
+  if ($servable.Count -eq 0) { throw 'no runnable Chrome version found (no complete mirror, no viable version directory)' }
+  $newest = @($servable | Sort-Object { [version]$_ })[-1]
+
+  # Keep the newest, plus anything a browser is still running from.
+  $keep = @($newest)
+  foreach ($v in Get-MirrorVersions) {
+    if ($keep -notcontains $v -and (Get-LiveProcessCount (Join-Path (Get-MirrorRoot) $v)) -gt 0) { $keep += $v }
   }
 
-  $mirrors = @(Get-MirrorVersions | Where-Object { Test-Mirror $_ })
-  if ($mirrors.Count -eq 0) { throw 'no usable mirror and no genuine launcher to build one from' }
-  $newest    = $mirrors[-1]
-  $newestExe = Join-Path (Join-Path (Get-MirrorRoot) $newest) 'chrome.exe'
+  # STEP 2: build only what we keep - never build something we are about to prune.
+  foreach ($v in $keep) {
+    if (Test-Mirror $v) { continue }
+    if (-not $targets.ContainsKey($v)) { Log "no genuine launcher for v$v - cannot build its mirror" 'WARN'; continue }
+    Log "mirror v$v missing or incomplete - (re)building" 'ACT'
+    Sync-Mirror $dir $v $targets[$v] | Out-Null
+  }
+  if (-not (Test-Mirror $newest)) { throw "could not produce a usable mirror for $newest" }
+  $newestExe = Get-MirrorLauncher $newest
 
-  # STEP 2: build the wrapper, stamped with the version it will launch.
+  # STEP 3: build the wrapper, stamped with the version it will launch.
   $wrap = New-Wrapper $newest $newestExe
 
-  # STEP 3: ensure chrome.exe is our current wrapper.
+  # STEP 4: ensure chrome.exe is our current wrapper.
   $want = "$WRAPPER_VER|$newest"
   $needInstall = $false
   if (-not (Test-Path $exe)) { $needInstall = $true }
@@ -95,8 +104,7 @@ try {
     }
   }
 
-  # STEP 4: if Google staged an update, hand its swap our wrapper too, so the
-  # promoted chrome.exe is never a genuine binary without the debug port. Only
+  # STEP 5: if Google staged an update, hand its swap our wrapper too, but only
   # once that version is safely mirrored - otherwise this would destroy the only
   # copy of a genuine launcher we had not captured yet.
   if ((Test-Path $newChrome) -and (Test-Google $newChrome)) {
@@ -108,14 +116,23 @@ try {
     else { Log "new_chrome.exe v$ncv is not mirrored yet - leaving it genuine this run" 'WARN' }
   }
 
-  # STEP 5: drop mirrors nothing runs from any more. This is what reclaims disk:
+  # STEP 6: drop mirrors nothing runs from any more. This is what reclaims disk:
   # once Google removed its own name, our hardlink is the data's last reference.
-  Remove-StaleMirror $newest
+  Remove-StaleMirror $keep
 
-  # STEP 6: retire the previous design's launchers once they are safely mirrored.
+  # STEP 7: keep exactly one genuine launcher beside Chrome as a rebuild seed,
+  # hardlinked from the mirror so it costs nothing. Without it the mirror's own
+  # chrome.exe is the ONLY genuine launcher on the machine, and losing it leaves
+  # the tool with nothing to rebuild from.
+  $seedName = "chrome_real_$newest.exe"
+  $seed     = Join-Path $dir $seedName
+  if (-not (Test-Path $seed)) {
+    if (New-Link $newestExe $seed) { Log "kept rebuild seed $seedName" 'ACT' }
+    else { Log "could not create rebuild seed $seedName" 'WARN' }
+  }
   Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
-    Where-Object { $v = Get-FileVersion $_.FullName; $v -and (Test-Mirror $v) -and -not (Test-Locked $_.FullName) } |
-    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; Log "retired legacy $($_.Name)" }
+    Where-Object { $_.Name -ne $seedName -and -not (Test-Locked $_.FullName) } |
+    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; Log "retired stale launcher $($_.Name)" }
 
   Log "state OK: wrapper at chrome.exe, mirror(s)=$((Get-MirrorVersions) -join ','), launching $newest" 'OK'
 }

@@ -12,6 +12,20 @@
 
 $MirrorSentinel = '.mirror_complete'
 
+# A version directory is only worth mirroring if it can actually run a browser.
+# Google's cleanup strips everything it can and leaves the mapped .dll files
+# behind, so a "half-deleted" directory still looks populated - mirroring one
+# would faithfully reproduce a browser that dies on every new tab. icudtl.dat is
+# the file whose absence was measured to be fatal (STATUS_BREAKPOINT).
+$RequiredFiles = @('chrome.dll', 'icudtl.dat')
+
+function Test-VersionUsable($chromeDir, $version) {
+  $src = Join-Path $chromeDir $version
+  if (-not (Test-Path $src)) { return $false }
+  foreach ($f in $RequiredFiles) { if (-not (Test-Path (Join-Path $src $f))) { return $false } }
+  return $true
+}
+
 # Rebase $path from under $from to under $to. Uses Substring, not .Replace:
 # .Replace is case-sensitive, so a case difference between the configured root
 # and what Get-ChildItem returns would leave the path UNCHANGED - and an
@@ -31,14 +45,17 @@ function New-Link($target, $link) {
   }
 }
 
+function Get-MirrorLauncher($version) { Join-Path (Join-Path (Get-MirrorRoot) $version) 'chrome.exe' }
+
 # Build <mirror root>\<version>\ from Chrome's <version>\ plus a genuine launcher.
 # Idempotent: existing links are left alone, missing ones are filled in, so an
 # interrupted previous run is completed rather than left half-built.
 function Sync-Mirror($chromeDir, $version, $launcher) {
-  $srcDir = Join-Path $chromeDir $version
-  if (-not (Test-Path $srcDir)) { Log "no version dir $version in Chrome's install - cannot mirror" 'WARN'; return $false }
-  $srcDir = (Get-Item $srcDir).FullName            # canonical case, so rebasing is exact
-
+  if (-not (Test-VersionUsable $chromeDir $version)) {
+    Log "version dir $version is missing $($RequiredFiles -join '/') - refusing to mirror a browser that cannot run" 'WARN'
+    return $false
+  }
+  $srcDir = (Get-Item (Join-Path $chromeDir $version)).FullName   # canonical case, so rebasing is exact
   $root     = Join-Path (Get-MirrorRoot) $version
   $dstDir   = Join-Path $root $version
   $dstExe   = Join-Path $root 'chrome.exe'
@@ -65,31 +82,33 @@ function Sync-Mirror($chromeDir, $version, $launcher) {
   }
 
   if ($failed) { Log "mirror $version incomplete ($failed link(s) failed) - will retry next run" 'WARN'; return $false }
+  # Re-check through the mirror itself: the sentinel must never outrun reality.
+  foreach ($f in $RequiredFiles) {
+    if (-not (Test-Path (Join-Path $dstDir $f))) { Log "mirror $version still missing $f - not marking complete" 'WARN'; return $false }
+  }
   Set-Content -Path $sentinel -Value $version -Encoding ASCII
   if ($made) { Log "mirrored v$version ($made link(s))" 'ACT' }
   return $true
 }
 
-# Usable only if the launcher, its version directory, AND the completion marker
-# are all present. The marker is what stops a partially built mirror from being
-# treated as done and skipped forever.
+# Usable only if the launcher, its version directory, the completion marker AND
+# the files a renderer actually needs are all present.
 function Test-Mirror($version) {
   $root = Join-Path (Get-MirrorRoot) $version
-  return ((Test-Path (Join-Path $root 'chrome.exe')) -and
-          (Test-Path (Join-Path $root $version)) -and
-          (Test-Path (Join-Path $root $MirrorSentinel)))
+  if (-not (Test-Path (Join-Path $root 'chrome.exe')))     { return $false }
+  if (-not (Test-Path (Join-Path $root $MirrorSentinel)))  { return $false }
+  foreach ($f in $RequiredFiles) { if (-not (Test-Path (Join-Path (Join-Path $root $version) $f))) { return $false } }
+  return $true
 }
 
-function Get-MirrorVersions {
-  return @(Get-VersionDirs (Get-MirrorRoot) | ForEach-Object { $_.Name })
-}
+function Get-MirrorVersions { @(Get-VersionDirs (Get-MirrorRoot) | ForEach-Object { $_.Name }) }
 
 # Keep the newest mirror plus any mirror a browser is still running from; drop
 # the rest. Deleting a mirror is what actually reclaims the disk, because once
 # Google removed its own name the hardlink is the file's last reference.
-function Remove-StaleMirror($keepVersion) {
+function Remove-StaleMirror($keepVersions) {
   foreach ($v in Get-MirrorVersions) {
-    if ($v -eq $keepVersion) { continue }
+    if ($keepVersions -contains $v) { continue }
     $root = Join-Path (Get-MirrorRoot) $v
     $live = Get-LiveProcessCount $root
     if ($live -gt 0) { Log "mirror v$v still has $live live process(es) - keeping"; continue }

@@ -62,19 +62,10 @@ function Export-ExeIcon($srcExe, $icoPath) {
   }
 }
 
-# Pick a genuine Chrome exe (newest chrome_real_<ver>.exe, else a staged genuine
-# new_chrome.exe, else a genuine chrome.exe) and extract its icon to $tmp\chrome.ico.
+# Extract $srcExe's icon (a genuine Chrome launcher) to $tmp\chrome.ico.
 # Returns the .ico path, or $null if there is no source / extraction failed.
-# Uses Test-Google, resolved from run.ps1's scope via dot-sourcing.
-function Resolve-WrapperIcon($dir, $realRe, $newChrome, $exe, $tmp) {
-  $reals = @(Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
-             Where-Object { $_.BaseName -match $realRe } |
-             Sort-Object { [version]($_.BaseName -replace '^chrome_real_', '') })
-  $src = if ($reals.Count) { $reals[-1].FullName }
-         elseif ((Test-Path $newChrome) -and (Test-Google $newChrome)) { $newChrome }
-         elseif ((Test-Path $exe) -and (Test-Google $exe)) { $exe }
-         else { $null }
-  if (-not $src) { return $null }
+function Resolve-WrapperIcon($srcExe, $tmp) {
+  if (-not $srcExe -or -not (Test-Path $srcExe)) { return $null }
   $ico = Join-Path $tmp 'chrome.ico'
-  if (Export-ExeIcon $src $ico) { return $ico } else { return $null }
+  if (Export-ExeIcon $srcExe $ico) { return $ico } else { return $null }
 }

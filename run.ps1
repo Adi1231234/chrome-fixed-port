@@ -1,160 +1,100 @@
-# Scheduled runner - point your scheduled task at this file. Keep the sibling lib/
-# folder next to it (for the Chrome icon); without it the wrapper still works, just
-# without Chrome's icon.
-# Makes every Chrome launch open --remote-debugging-port=9225 via a wrapper,
-# WITHOUT ever overwriting the binary a running browser uses - so a Chrome
-# self-update can never cause the version-skew that crashes new tabs.
-# Mechanism, root cause, and proof: see README.md and CLAUDE.md.
+# Scheduled runner - point your scheduled task at this file, and keep the sibling
+# lib/ folder next to it.
+#
+# Makes every Chrome launch open --remote-debugging-port=9225, and keeps the
+# running browser immune to Chrome's own updater. Google's setup.exe deletes any
+# version directory it does not recognise as current, WITHOUT a working in-use
+# check, so we never let a browser depend on a directory Google owns: it runs
+# from a private hardlink mirror instead. Root cause and proof: README.md.
 
-$WRAPPER_VER = '3'  # bump when $wrapperSrc OR the embedded-icon logic changes, to force a reinstall
-$dir = if ($env:CHROME_FIXED_PORT_DIR) { $env:CHROME_FIXED_PORT_DIR } else { "$env:LOCALAPPDATA\Google\Chrome\Application" }
+$WRAPPER_VER = '4'   # bump when $wrapperSrc changes, to force a reinstall
+
+$here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
+foreach ($m in 'Common', 'Wrapper', 'Mirror') { . (Join-Path $here "lib\$m.ps1") }
+$optionalIcon = Join-Path $here 'lib\Get-ExeIcon.ps1'
+if (Test-Path $optionalIcon) { . $optionalIcon }
+
+$dir       = Get-ChromeDir
 $exe       = Join-Path $dir 'chrome.exe'
 $newChrome = Join-Path $dir 'new_chrome.exe'
 $marker    = Join-Path $dir '.wrapper_ver'
-$realRe    = '^chrome_real_\d+(\.\d+){1,3}$'   # matches chrome_real_150.0.7871.184, not chrome_real_old_*
 
-function Log($msg, $lvl = 'INFO') {
-  $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-  $c = switch ($lvl) { 'OK' {'Green'} 'WARN' {'Yellow'} 'ERR' {'Red'} 'ACT' {'Cyan'} default {'Gray'} }
-  Write-Host "[$ts] [$lvl] $msg" -ForegroundColor $c
-}
-function Test-Google($p) {
-  if (-not (Test-Path $p)) { return $false }
-  $s = Get-AuthenticodeSignature $p
-  return ($s.Status -eq 'Valid' -and $s.SignerCertificate.Subject -match 'Google')
-}
-function Test-Locked($p) {
-  try { $fs = [IO.File]::Open($p, 'Open', 'ReadWrite', 'None'); $fs.Close(); return $false } catch { return $true }
+# Replace $dst by REMOVING it first. Overwriting in place would write through any
+# hardlink we already made to it and corrupt the mirror; unlinking leaves the
+# mirror's link as the file's sole owner, untouched.
+function Set-FileFresh($src, $dst) {
+  if (Test-Path $dst) { Remove-Item $dst -Force -ErrorAction Stop }
+  Copy-Item $src $dst -Force -ErrorAction Stop
 }
 
-# Optional icon embedding lives in lib/Get-ExeIcon.ps1; if absent, wrapper is icon-less.
-$libIcon = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'lib\Get-ExeIcon.ps1' } else { $null }
-if ($libIcon -and (Test-Path $libIcon)) { . $libIcon }
-
-$wrapperSrc = @'
-using System; using System.Diagnostics; using System.IO; using System.Text;
-class Wrapper {
-  static string StripArgv0(string cmd){
-    cmd=cmd.TrimStart();
-    if(cmd.StartsWith("\"")){int e=cmd.IndexOf('"',1);return e<0?"":cmd.Substring(e+1).TrimStart();}
-    int s=cmd.IndexOfAny(new[]{' ','\t'}); return s<0?"":cmd.Substring(s+1).TrimStart();
+# Every genuine Chrome launcher we can currently see, as version -> path.
+# chrome_real_*.exe is the previous design's name, still honoured so an existing
+# install migrates into the mirror instead of losing its launcher.
+function Get-GenuineLaunchers($dir, $exe, $newChrome) {
+  $found = @{}
+  $cands = @($exe, $newChrome) + @(Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
+                                   ForEach-Object { $_.FullName })
+  foreach ($p in $cands) {
+    if (-not (Test-Path $p)) { continue }
+    if (-not (Test-Google $p)) { continue }
+    $v = Get-FileVersion $p
+    if ($v -and -not $found.ContainsKey($v)) { $found[$v] = $p }
   }
-  static bool Has(string h,string n){return h.IndexOf(n,StringComparison.OrdinalIgnoreCase)>=0;}
-  static string NewestReal(string dir){
-    string best=null; Version bv=null;
-    foreach(var f in Directory.GetFiles(dir,"chrome_real_*.exe")){
-      var s=Path.GetFileNameWithoutExtension(f).Substring("chrome_real_".Length);
-      Version v; if(Version.TryParse(s,out v)){ if(bv==null||v>bv){bv=v;best=f;} }
-    }
-    return best;
-  }
-  static int Main(){
-    string wp=Process.GetCurrentProcess().MainModule.FileName;
-    string real=NewestReal(Path.GetDirectoryName(wp));
-    if(real==null) return 1;
-    string rest=StripArgv0(Environment.CommandLine);
-    string args;
-    if(Has(rest,"--type=")){ args=rest; }
-    else{
-      string ov=Environment.GetEnvironmentVariable("CHROME_WRAP_OVERRIDE"); string flags;
-      if(!string.IsNullOrEmpty(ov)){ flags=ov+" "; }
-      else{
-        var sb=new StringBuilder();
-        if(!Has(rest,"--remote-debugging-port")) sb.Append("--remote-debugging-port=9225 --remote-allow-origins=* ");
-        if(!Has(rest,"--user-data-dir")){
-          string udd=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Google\\ChromeDebug");
-          sb.Append("--user-data-dir=\""+udd+"\" ");
-        }
-        flags=sb.ToString();
-      }
-      args=(flags+rest).Trim();
-    }
-    try{ Process.Start(new ProcessStartInfo{FileName=real,Arguments=args,UseShellExecute=false}); }catch{ return 1; }
-    return 0;
-  }
-}
-'@
-
-# Compile the wrapper in a throwaway temp dir; returns @{Exe; Tmp}. Caller removes Tmp.
-# If lib/Get-ExeIcon.ps1 is present, embed Chrome's icon so shortcuts (which read
-# "chrome.exe,0") show it. Fail-safe: if embedding fails, retry the compile icon-less.
-function New-Wrapper {
-  $tmp = Join-Path $env:TEMP ('cw_' + [guid]::NewGuid().ToString('N'))
-  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-  $cs = Join-Path $tmp 'w.cs'; Set-Content -Path $cs -Value $wrapperSrc -Encoding UTF8
-  $we = Join-Path $tmp 'w.exe'
-  $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-  $icoArg = @()
-  if (Get-Command Resolve-WrapperIcon -ErrorAction SilentlyContinue) {
-    $ico = Resolve-WrapperIcon $dir $realRe $newChrome $exe $tmp
-    if ($ico) { $icoArg = @("-win32icon:$ico") }
-  }
-  & $csc -nologo -target:winexe @icoArg -out:$we $cs | Out-Null
-  if ((-not (Test-Path $we)) -and $icoArg.Count) {
-    Log 'compile with embedded icon failed - retrying without icon' 'WARN'
-    & $csc -nologo -target:winexe -out:$we $cs | Out-Null
-  }
-  if (-not (Test-Path $we)) { throw 'wrapper compile failed (is .NET Framework csc present?)' }
-  return @{ Exe = $we; Tmp = $tmp }
+  return $found
 }
 
-# Move a genuine launcher at $path into chrome_real_<ver>.exe (immutable per version),
-# or just drop $path if that version is already stored. Never overwrites an existing copy.
-function Save-Genuine($path) {
-  $v = (Get-Item $path).VersionInfo.FileVersion
-  $target = Join-Path $dir "chrome_real_$v.exe"
-  try {
-    if (Test-Path $target) { Remove-Item $path -Force -ErrorAction SilentlyContinue }
-    else { Move-Item $path $target -Force; Log "stashed genuine v$v -> $(Split-Path $target -Leaf)" 'ACT' }
-  } catch { Log "could not stash $(Split-Path $path -Leaf): $($_.Exception.Message)" 'WARN' }
-}
-
-Log "=== apply start (chrome fixed-port wrapper) user=$env:USERNAME dir=$dir ==="
+Log "=== apply start (chrome fixed-port, mirror design) user=$env:USERNAME dir=$dir ==="
 $code = 0; $wrap = $null
 try {
   if (-not (Test-Path $dir)) { throw "Application dir not found: $dir" }
-  $wrap = New-Wrapper
+  New-Item -ItemType Directory -Force -Path (Get-MirrorRoot) | Out-Null
 
-  # STEP 1: ride Google's swap - prime new_chrome.exe with our wrapper so Google promotes it
-  if ((Test-Path $newChrome) -and (Test-Google $newChrome)) {
-    Save-Genuine $newChrome
-    Copy-Item $wrap.Exe $newChrome -Force
-    Log "primed new_chrome.exe with wrapper (rides Google's next swap)" 'ACT'
+  # STEP 1: mirror every genuine launcher we can see, before anything overwrites it.
+  foreach ($kv in (Get-GenuineLaunchers $dir $exe $newChrome).GetEnumerator()) {
+    if (Test-Mirror $kv.Key) { continue }
+    Sync-Mirror $dir $kv.Key $kv.Value | Out-Null
   }
 
-  # STEP 2: ensure chrome.exe is our current wrapper
+  $mirrors = @(Get-MirrorVersions | Where-Object { Test-Mirror $_ })
+  if ($mirrors.Count -eq 0) { throw 'no usable mirror and no genuine launcher to build one from' }
+  $newest    = $mirrors[-1]
+  $newestExe = Join-Path (Join-Path (Get-MirrorRoot) $newest) 'chrome.exe'
+
+  # STEP 2: build the wrapper, stamped with the version it will launch.
+  $wrap = New-Wrapper $newest $newestExe
+
+  # STEP 3: ensure chrome.exe is our current wrapper.
+  $want = "$WRAPPER_VER|$newest"
   $needInstall = $false
   if (-not (Test-Path $exe)) { $needInstall = $true }
-  elseif (Test-Google $exe) {                                   # missed the window: Google put genuine here
-    if (Test-Locked $exe) { Log "chrome.exe is genuine but locked by a running browser - deferring to next run" 'WARN' }
-    else { Save-Genuine $exe; $needInstall = $true; Log "chrome.exe was genuine (missed swap window) - reinstalling wrapper" 'ACT' }
-  }
-  elseif ((-not (Test-Path $marker)) -or ((Get-Content $marker -ErrorAction SilentlyContinue) -ne $WRAPPER_VER)) { $needInstall = $true }
+  elseif (Test-Google $exe)  { $needInstall = $true; Log 'chrome.exe is genuine (Chrome updated) - reinstalling wrapper' 'ACT' }
+  elseif ((-not (Test-Path $marker)) -or ((Get-Content $marker -ErrorAction SilentlyContinue) -ne $want)) { $needInstall = $true }
   if ($needInstall) {
-    if ((Test-Path $exe) -and (Test-Locked $exe)) { Log "chrome.exe locked - cannot reinstall wrapper this run" 'WARN' }
-    else { Copy-Item $wrap.Exe $exe -Force; Set-Content -Path $marker -Value $WRAPPER_VER -Encoding ASCII; Log "installed wrapper v$WRAPPER_VER at chrome.exe" 'OK' }
-  }
-
-  # STEP 3: cleanup - keep newest chrome_real_<ver>.exe + any locked; delete the rest
-  $reals = @(Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
-             Where-Object { $_.BaseName -match $realRe } |
-             Sort-Object { [version]($_.BaseName -replace '^chrome_real_', '') })
-  if ($reals.Count -gt 1) {
-    $newest = $reals[-1].FullName
-    foreach ($f in $reals) {
-      if ($f.FullName -eq $newest) { continue }
-      if (Test-Locked $f.FullName) { continue }
-      Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue; Log "removed stale $($f.Name)"
+    if ((Test-Path $exe) -and (Test-Locked $exe)) { Log 'chrome.exe locked by a running browser - deferring to next run' 'WARN' }
+    else {
+      Set-FileFresh $wrap.Exe $exe
+      Set-Content -Path $marker -Value $want -Encoding ASCII
+      Log "installed wrapper v$WRAPPER_VER stamped $newest at chrome.exe" 'OK'
     }
   }
-  # sweep old random-suffix leftovers from the previous design, once unlocked
-  Get-ChildItem $dir -Filter 'chrome_real_old_*.exe' -ErrorAction SilentlyContinue |
-    Where-Object { -not (Test-Locked $_.FullName) } |
-    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; Log "removed legacy leftover $($_.Name)" }
 
-  $have = @(Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -match $realRe })
-  if ($have.Count -eq 0) { Log "no genuine chrome_real_<ver>.exe present - wrapper has nothing to launch" 'WARN' }
-  else { Log "state OK: wrapper at chrome.exe, $($have.Count) versioned genuine binary(ies), newest=$($have[-1].Name)" 'OK' }
+  # STEP 4: if Google staged an update, hand its swap our wrapper too, so the
+  # promoted chrome.exe is never a genuine binary without the debug port.
+  if ((Test-Path $newChrome) -and (Test-Google $newChrome)) {
+    try { Set-FileFresh $wrap.Exe $newChrome; Log "primed new_chrome.exe with wrapper (rides Google's next swap)" 'ACT' }
+    catch { Log "could not prime new_chrome.exe: $($_.Exception.Message)" 'WARN' }
+  }
+
+  # STEP 5: drop mirrors nothing runs from any more. This is what reclaims disk:
+  # once Google removed its own name, our hardlink is the data's last reference.
+  Remove-StaleMirror $newest
+
+  # STEP 6: retire the previous design's launchers once they are safely mirrored.
+  Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
+    Where-Object { $v = Get-FileVersion $_.FullName; $v -and (Test-Mirror $v) -and -not (Test-Locked $_.FullName) } |
+    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; Log "retired legacy $($_.Name)" }
+
+  Log "state OK: wrapper at chrome.exe, mirror(s)=$((Get-MirrorVersions) -join ','), launching $newest" 'OK'
 }
 catch { Log "FAILED: $($_.Exception.Message)" 'ERR'; $code = 1 }
 finally { if ($wrap) { Remove-Item $wrap.Tmp -Recurse -Force -ErrorAction SilentlyContinue } }

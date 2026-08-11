@@ -4,6 +4,11 @@
 #
 # run.ps1 is the tool; lib/Get-ExeIcon.ps1 gives it Chrome's icon. It only applies the
 # wrapper - scheduling it to run periodically is up to you. Safe to re-run (idempotent).
+#
+# A failing run.ps1 is re-raised as a terminating error, so a scheduled task running
+# this one-liner reports failure instead of silently succeeding. It throws rather than
+# calling exit because this script is dot-executed into the caller's session by `iex`,
+# and `exit` there would tear down an interactive console.
 $ErrorActionPreference = 'Stop'
 $repo   = 'Adi1231234/chrome-fixed-port'
 $branch = 'main'
@@ -23,6 +28,8 @@ try {
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$repo/$branch/$f" -OutFile $dest -UseBasicParsing
     }
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tmp 'run.ps1')
+    $code = $LASTEXITCODE
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
+if ($code -ne 0) { throw "chrome-fixed-port: run.ps1 failed with exit code $code" }

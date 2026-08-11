@@ -14,10 +14,13 @@ foreach ($m in 'Common', 'Wrapper', 'Mirror') { . (Join-Path $here "lib\$m.ps1")
 $optionalIcon = Join-Path $here 'lib\Get-ExeIcon.ps1'
 if (Test-Path $optionalIcon) { . $optionalIcon }
 
-$dir       = Get-ChromeDir
-$exe       = Join-Path $dir 'chrome.exe'
-$newChrome = Join-Path $dir 'new_chrome.exe'
-$marker    = Join-Path $dir '.wrapper_ver'
+$dir = Get-ChromeDir
+# [IO.Path]::Combine, not Join-Path: Join-Path resolves through the PowerShell
+# provider and emits a noisy "Cannot find drive" error per call when the configured
+# directory is bad - three of them ahead of the one clean message that says why.
+$exe       = [IO.Path]::Combine($dir, 'chrome.exe')
+$newChrome = [IO.Path]::Combine($dir, 'new_chrome.exe')
+$marker    = [IO.Path]::Combine($dir, '.wrapper_ver')
 
 # Replace $dst by REMOVING it first. Overwriting in place would write through any
 # hardlink we already made to it and corrupt the mirror; unlinking leaves the

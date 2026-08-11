@@ -6,10 +6,13 @@
 # only when its name matches chrome.exe's FileVersion, so an unstamped wrapper
 # (0.0.0.0) leaves Chrome's own install classified as stray and purgeable.
 
+# AssemblyFileVersion alone sets the Win32 version resource, which is all Chrome
+# reads. AssemblyVersion is deliberately NOT set: it rejects any component above
+# 65534, so a future Chrome build number would turn the compile into a hard
+# failure and the whole run would abort.
 $wrapperSrc = @'
 using System; using System.Diagnostics; using System.IO; using System.Reflection; using System.Text;
-[assembly: AssemblyFileVersion("__STAMP__")]
-[assembly: AssemblyVersion("__STAMP__")]
+__STAMPATTR__
 class Wrapper {
   static string StripArgv0(string cmd){
     cmd=cmd.TrimStart();
@@ -22,7 +25,9 @@ class Wrapper {
     if(!string.IsNullOrEmpty(o)) return o;
     return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ChromeFixedPort");
   }
-  // Newest <root>\<ver>\chrome.exe that still has its matching <ver>\ beside it.
+  // Newest complete mirror. The .mirror_complete marker matters: without it a
+  // half-built mirror (interrupted sync) would look launchable and the browser
+  // would start against a version directory that is missing files.
   static string NewestMirror(){
     string root=MirrorRoot();
     if(!Directory.Exists(root)) return null;
@@ -32,6 +37,7 @@ class Wrapper {
       if(!Version.TryParse(name,out v)) continue;
       if(!File.Exists(Path.Combine(d,"chrome.exe"))) continue;
       if(!Directory.Exists(Path.Combine(d,name))) continue;
+      if(!File.Exists(Path.Combine(d,".mirror_complete"))) continue;
       if(bv==null||v>bv){bv=v;best=Path.Combine(d,"chrome.exe");}
     }
     return best;
@@ -72,11 +78,18 @@ class Wrapper {
 # $stamp is the version to embed. If lib/Get-ExeIcon.ps1 is loaded, Chrome's icon is
 # embedded too. Fail-safe: if embedding fails, retry the compile icon-less.
 function New-Wrapper($stamp, $iconSourceExe) {
-  if (-not $stamp) { throw 'New-Wrapper needs a version to stamp' }
   $tmp = Join-Path $env:TEMP ('cw_' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+  # A malformed version must not fail the whole run: the mirror already protects
+  # the browser, and the stamp is only the extra layer that keeps Chrome's own
+  # install excluded from its own cleanup. Drop the attribute and carry on.
+  $attr = ''
+  if ($stamp -match '^\d+(\.\d+){3}$') { $attr = "[assembly: AssemblyFileVersion(`"$stamp`")]" }
+  else { Log "version '$stamp' is not a 4-part number - building wrapper without a version stamp" 'WARN' }
+
   $cs = Join-Path $tmp 'w.cs'
-  Set-Content -Path $cs -Value $wrapperSrc.Replace('__STAMP__', $stamp) -Encoding UTF8
+  Set-Content -Path $cs -Value $wrapperSrc.Replace('__STAMPATTR__', $attr) -Encoding UTF8
   $we  = Join-Path $tmp 'w.exe'
   $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 

@@ -49,9 +49,21 @@ try {
   if (-not (Test-Path $dir)) { throw "Application dir not found: $dir" }
   New-Item -ItemType Directory -Force -Path (Get-MirrorRoot) | Out-Null
 
-  # STEP 1: mirror every genuine launcher we can see, before anything overwrites it.
-  foreach ($kv in (Get-GenuineLaunchers $dir $exe $newChrome).GetEnumerator()) {
+  # STEP 1: make sure every version we care about has a COMPLETE mirror, before
+  # anything overwrites a genuine launcher. Candidates are the genuine launchers
+  # still sitting in Chrome's directory PLUS any mirror we already have - in
+  # steady state Chrome's directory holds only our wrapper, so a damaged mirror
+  # can only be repaired from its own (genuine) launcher.
+  $targets = @{}
+  foreach ($kv in (Get-GenuineLaunchers $dir $exe $newChrome).GetEnumerator()) { $targets[$kv.Key] = $kv.Value }
+  foreach ($v in Get-MirrorVersions) {
+    if ($targets.ContainsKey($v)) { continue }
+    $ml = Join-Path (Join-Path (Get-MirrorRoot) $v) 'chrome.exe'
+    if (Test-Path $ml) { $targets[$v] = $ml }
+  }
+  foreach ($kv in $targets.GetEnumerator()) {
     if (Test-Mirror $kv.Key) { continue }
+    Log "mirror v$($kv.Key) missing or incomplete - (re)building" 'ACT'
     Sync-Mirror $dir $kv.Key $kv.Value | Out-Null
   }
 
@@ -68,21 +80,32 @@ try {
   $needInstall = $false
   if (-not (Test-Path $exe)) { $needInstall = $true }
   elseif (Test-Google $exe)  { $needInstall = $true; Log 'chrome.exe is genuine (Chrome updated) - reinstalling wrapper' 'ACT' }
-  elseif ((-not (Test-Path $marker)) -or ((Get-Content $marker -ErrorAction SilentlyContinue) -ne $want)) { $needInstall = $true }
+  elseif ((-not (Test-Path $marker)) -or (((Get-Content $marker -Raw -ErrorAction SilentlyContinue) + '').Trim() -ne $want)) { $needInstall = $true }
   if ($needInstall) {
     if ((Test-Path $exe) -and (Test-Locked $exe)) { Log 'chrome.exe locked by a running browser - deferring to next run' 'WARN' }
     else {
-      Set-FileFresh $wrap.Exe $exe
-      Set-Content -Path $marker -Value $want -Encoding ASCII
-      Log "installed wrapper v$WRAPPER_VER stamped $newest at chrome.exe" 'OK'
+      # A browser can still grab chrome.exe between the check and the copy. That
+      # must defer to the next run, not abort the cleanup steps below.
+      try {
+        Set-FileFresh $wrap.Exe $exe
+        Set-Content -Path $marker -Value $want -Encoding ASCII
+        Log "installed wrapper v$WRAPPER_VER stamped $newest at chrome.exe" 'OK'
+      }
+      catch { Log "could not install wrapper this run: $($_.Exception.Message)" 'WARN' }
     }
   }
 
   # STEP 4: if Google staged an update, hand its swap our wrapper too, so the
-  # promoted chrome.exe is never a genuine binary without the debug port.
+  # promoted chrome.exe is never a genuine binary without the debug port. Only
+  # once that version is safely mirrored - otherwise this would destroy the only
+  # copy of a genuine launcher we had not captured yet.
   if ((Test-Path $newChrome) -and (Test-Google $newChrome)) {
-    try { Set-FileFresh $wrap.Exe $newChrome; Log "primed new_chrome.exe with wrapper (rides Google's next swap)" 'ACT' }
-    catch { Log "could not prime new_chrome.exe: $($_.Exception.Message)" 'WARN' }
+    $ncv = Get-FileVersion $newChrome
+    if ($ncv -and (Test-Mirror $ncv)) {
+      try { Set-FileFresh $wrap.Exe $newChrome; Log "primed new_chrome.exe with wrapper (rides Google's next swap)" 'ACT' }
+      catch { Log "could not prime new_chrome.exe: $($_.Exception.Message)" 'WARN' }
+    }
+    else { Log "new_chrome.exe v$ncv is not mirrored yet - leaving it genuine this run" 'WARN' }
   }
 
   # STEP 5: drop mirrors nothing runs from any more. This is what reclaims disk:

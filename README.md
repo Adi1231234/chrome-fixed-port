@@ -2,100 +2,96 @@
 
 # 🔌 chrome-fixed-port
 
-**Keeps _every_ Chrome launch opening with `--remote-debugging-port=9225` (on a separate `ChromeDebug` profile) - update-safe, so a Chrome self-update can never cause the version skew that crashes new tabs.**
+**Keeps _every_ Chrome launch opening with `--remote-debugging-port=9225` - update-safe, because the running browser never depends on a directory Google's installer is willing to delete.**
 
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5391FE?logo=powershell&logoColor=white)
 ![Browser](https://img.shields.io/badge/Google%20Chrome-4285F4?logo=googlechrome&logoColor=white)
-![Update-safe](https://img.shields.io/badge/rides%20Google's%20own%20swap-2ea44f)
+![Update-safe](https://img.shields.io/badge/hardlink%20mirror-2ea44f)
 ![Install](https://img.shields.io/badge/install-one%20line-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-<sub>Replaces <code>chrome.exe</code> with a tiny wrapper that launches the genuine binary + the debug flag · never overwrites the binary a running browser uses · idempotent, safe to re-run.</sub>
+<sub>Replaces <code>chrome.exe</code> with a small wrapper that launches a private hardlink mirror of Chrome · costs ~0 disk · idempotent, safe to re-run.</sub>
 
 </div>
 
 ---
 
-Replaces `chrome.exe` with a tiny wrapper so the remote-debugging port is **always** on, without the [version-skew crash](#the-problem-this-solves) that a naive approach causes. [run.ps1](run.ps1) does the work and is meant to run periodically from a scheduled task.
-
 ## ⚡ Quick start
-
-One line in **PowerShell** - no clone, no git required:
 
 ```powershell
 irm https://raw.githubusercontent.com/Adi1231234/chrome-fixed-port/main/install.ps1 | iex
 ```
 
-It downloads `run.ps1` to a temp folder, runs it once, and cleans up. **Idempotent** - safe to re-run any time. Then, the first time only, **close and reopen Chrome once** so Google's swap promotes the wrapper. To keep it applied across Chrome updates, **run it periodically from your own scheduled task** (it is meant to run on a timer). *(Cloned the repo instead? Just run `./run.ps1`.)*
+Downloads `run.ps1` + `lib/` to a temp folder, runs it once, cleans up. **Idempotent.**
+To stay applied across Chrome updates, **run it periodically from your own scheduled task**.
+*(Cloned the repo instead? Just run `./run.ps1`.)*
 
 ## The problem this solves
 
-Chrome is multi-process: one browser process plus one process per tab, all
-launched from the same launcher `.exe` and all loading the same
-`<version>\chrome.dll`. **They must be the exact same version to talk to each
-other** - if the browser is version A and a new tab's process is version B, the
-tab crashes instantly (sad/blank tab).
+Chrome is multi-process. Every process loads `<version>\chrome.dll` and the resources
+beside it, and a **new** renderer re-opens those files from disk when it starts.
+Delete them out from under a running browser and existing tabs keep working while
+every new tab dies instantly with `STATUS_BREAKPOINT`.
 
-Chrome updates itself safely by **never touching the running binary**: it adds a
-new `<version>\` folder, stages the new launcher as `new_chrome.exe`, and only
-swaps `new_chrome.exe -> chrome.exe` later (done by Google's own
-`setup.exe --rename-chrome-exe`, which triggers on the next full Chrome restart).
+That is exactly what Google's own installer does to this tool's predecessor.
+`chrome/installer/util/delete_old_versions.cc` classifies a version directory by a
+single test (line 91): does a file matching the glob `old_chrome*.exe` with a
+matching `FileVersion` sit next to it?
 
-The previous version of this tool broke that rule. After an update reverted the
-wrapper, it re-applied by **overwriting the single fixed-name `chrome_real.exe`
-with the new version while the old browser was still running**. The running
-browser (version A) then spawned every new tab from `chrome_real.exe`, which was
-now version B -> version skew -> every new tab crashed until Chrome was restarted.
+- **Yes** -> `DeleteVersion()`, which tries to lock every `.exe`/`.dll` first.
+- **No** -> `"Attempting to delete stray directory"` -> `DeletePathRecursively()`,
+  **with no in-use check at all**.
+
+The old design named the genuine launcher `chrome_real_<version>.exe`, which matches
+no glob Chrome knows, so the directory of the *running* browser was purged as stray.
+Measured on this machine: 18 files and all 8 subdirectories deleted, leaving only the
+7 mapped `.dll`s that Windows refuses to unlink. `icudtl.dat` was among the casualties,
+and it is the one file whose absence is fatal.
+
+Renaming to `old_chrome_<version>.exe` does **not** fix it. `DeleteVersion()`'s lock is
+opened with `GENERIC_READ` and `FILE_SHARE_DELETE` only, and a mapped image does not
+hold a conflicting file object - so that lock **succeeds** on a `chrome.dll` loaded by
+34 live processes, and the function proceeds to the same `DeletePathRecursively()`.
+Verified against `kernel32.dll` and a running `powershell.exe`, with passing controls.
+Both routes end at the same call. Only *exclusion* protects a directory, and Chrome
+excludes exactly two: the ones matching `chrome.exe` and `new_chrome.exe`'s `FileVersion`.
 
 ## The design
 
-- `chrome.exe` = our wrapper. On launch it finds the **newest**
-  `chrome_real_<version>.exe` and runs it, injecting the debug flags.
-- `chrome_real_<version>.exe` = the genuine Chrome launcher, **one immutable copy
-  per version**. An existing copy is never overwritten; updates only *add* a new
-  one. The launcher must stay at the top level so it finds `<version>\chrome.dll`.
-- A running browser is launched (by the wrapper) directly as
-  `chrome_real_<its version>.exe` and spawns its tabs from that same file. Since
-  that file is never overwritten, its tabs never skew.
+Do not fight the installer for ownership of a directory. Do not depend on that
+directory at all.
 
-### On a Chrome update we ride Google's own swap
-
-When Google stages `new_chrome.exe` (it sits there for hours to days before the
-swap), the scheduled run:
-
-1. moves `new_chrome.exe` -> `chrome_real_<its version>.exe` (stash the genuine
-   new launcher under its version name), then
-2. copies the **wrapper** into `new_chrome.exe`.
-
-Google then performs its normal swap and promotes our wrapper to `chrome.exe`.
-So `chrome.exe` is always the wrapper - no window without the debug port, no
-re-apply race, and nothing a running browser uses is ever touched.
-
-> Verified on this machine: Google's rename step is a blind file move with **no
-> signature check** - it promoted a deliberately unsigned `new_chrome.exe` to
-> `chrome.exe` (SHA-256 confirmed identical before/after). The one honest caveat
-> is that this is undocumented Google behavior that could change in a future
-> version; `STEP 2` in the script is the fallback if it ever does.
+- **`chrome.exe`** is our wrapper. It finds the newest mirror, injects the debug
+  flags, launches it, and **waits**, returning the browser's real exit code.
+- **The mirror** lives at `%LOCALAPPDATA%\ChromeFixedPort\<version>\` and is a
+  self-contained Chrome install built from **NTFS hardlinks**:
+  `chrome.exe` plus `<version>\`. Google's installer has never heard of this path.
+- A hardlink is a second name for the same data. When Google unlinks its own name,
+  the data survives because ours still references it. Measured: 265 links to a
+  483 MB tree consumed **0.1 MB**.
+- **The wrapper carries a real `FileVersion`** (the version it launches), so Chrome's
+  own install stays excluded from its own cleanup instead of being purged as stray.
+  An unstamped wrapper reports `0.0.0.0` and excludes nothing.
 
 ## No file clutter
 
-`STEP 3` keeps only the **newest** `chrome_real_<version>.exe` plus any copy that
-is **locked** (a browser is still running from it), and deletes the rest. A copy
-lingers only while genuinely in use; the next run sweeps it once the browser
-closes. Steady state is at most two of our files (newest + the running one). The
-cleanup only ever touches files matching `chrome_real_*.exe` - never
-`chrome_proxy.exe`, the version folders, or any other genuine Chrome file. Old
-random-suffix leftovers (`chrome_real_old_*.exe`) from the previous design are
-swept too, once unlocked.
+`run.ps1` keeps the newest mirror plus any mirror with a live process, and deletes the
+rest - which is what actually reclaims the disk, since after Google unlinks its copy
+our hardlink is the data's last reference. Steady state is one mirror costing nothing;
+worst case two, only between an update and your next Chrome restart.
+
+Liveness is decided by `Test-Locked`, which asks for **write** access. A mapped image
+denies writes, so it correctly reports a version still in use - the very check Chrome's
+installer gets wrong by asking only for read.
 
 ## Notes
 
-- Google's swap is triggered by a full Chrome restart, so after installing this
-  the first time (or recovering from the old skew) you must close and reopen
-  Chrome **once**; from then on updates are handled with no crashes.
-- `CHROME_WRAP_OVERRIDE` env var overrides the injected flags.
-- `CHROME_FIXED_PORT_DIR` env var overrides the Application directory (used for
-  testing against an isolated fake install).
-- `$WRAPPER_VER` / the `.wrapper_ver` marker force a wrapper reinstall when the
-  wrapper source changes.
+- `CHROME_WRAP_OVERRIDE` overrides the injected flags.
+- `CHROME_FIXED_PORT_DIR` overrides Chrome's Application directory (for testing).
+- `CHROME_FIXED_PORT_MIRROR` overrides the mirror root (for testing).
+- `$WRAPPER_VER` + the `.wrapper_ver` marker (`<ver>|<stamped version>`) force a reinstall.
+- The wrapper injects `--user-data-dir=%LOCALAPPDATA%\Google\ChromeDebug`. Check whether
+  that path is a junction to your real profile - if it is, the debug port drives your
+  real session, and CDP has no authentication.
+- Hardlinks need one NTFS volume; `Sync-Mirror` falls back to a real copy otherwise.

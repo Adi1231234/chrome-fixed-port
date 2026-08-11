@@ -7,7 +7,8 @@
 $ErrorActionPreference = 'Stop'
 $repo   = 'Adi1231234/chrome-fixed-port'
 $branch = 'main'
-$files  = 'run.ps1', 'lib/Get-ExeIcon.ps1'   # keep run.ps1 and its lib/ together
+# keep run.ps1 and its lib/ together; Get-ExeIcon.ps1 is the only optional one
+$files  = 'run.ps1', 'lib/Common.ps1', 'lib/Mirror.ps1', 'lib/Wrapper.ps1', 'lib/Get-ExeIcon.ps1'
 
 # TLS 1.2 for stock Windows PowerShell 5.1.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}

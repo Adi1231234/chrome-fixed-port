@@ -71,6 +71,14 @@ class Wrapper {
       else{
         var sb=new StringBuilder();
         if(!Has(rest,"--remote-debugging-port")) sb.Append("--remote-debugging-port=9225 --remote-allow-origins=* ");
+        // Without this, CDP Page.captureScreenshot never returns while the window is
+        // minimised: the copy request is queued against the current LocalSurfaceId and
+        // is only dequeued when the window draws or a new surface activates, and a
+        // minimised window does neither. This feature allocates a new LocalSurfaceId
+        // per capture, which is exactly the dequeue event. It is off by default in
+        // Chromium (crbug.com/377715191). Skipped when the caller brings its own
+        // --enable-features, because Chrome honours only one such flag.
+        if(!Has(rest,"--enable-features")) sb.Append("--enable-features=CDPScreenshotNewSurface ");
         if(!Has(rest,"--user-data-dir")){
           string udd=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Google\\ChromeDebug");
           sb.Append("--user-data-dir=\""+udd+"\" ");

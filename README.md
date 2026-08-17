@@ -100,6 +100,11 @@ installer gets wrong by asking only for read.
 ## Notes
 
 - `CHROME_WRAP_OVERRIDE` overrides the injected flags.
+- The wrapper also injects `--enable-features=CDPScreenshotNewSurface`. Without it, CDP
+  `Page.captureScreenshot` hangs forever whenever the Chrome window is minimised -
+  no error, no timeout - so any agent driving the browser stalls until you restore the
+  window. Chromium ships the fix disabled by default (crbug.com/377715191). Skipped if
+  you pass your own `--enable-features`, since Chrome honours only one such flag.
 - `CHROME_FIXED_PORT_DIR` overrides Chrome's Application directory (for testing).
 - `CHROME_FIXED_PORT_MIRROR` overrides the mirror root (for testing).
 - `$WRAPPER_VER` + the `.wrapper_ver` marker (`<ver>|<stamped version>`) force a reinstall.

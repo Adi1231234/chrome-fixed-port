@@ -7,7 +7,7 @@
 # check, so we never let a browser depend on a directory Google owns: it runs
 # from a private hardlink mirror instead. Root cause and proof: README.md.
 
-$WRAPPER_VER = '5'   # bump when $wrapperSrc changes, to force a reinstall
+$WRAPPER_VER = '6'   # bump when $wrapperSrc changes, to force a reinstall
 
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
 foreach ($m in 'Common', 'Wrapper', 'Mirror') { . (Join-Path $here "lib\$m.ps1") }

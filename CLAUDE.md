@@ -14,6 +14,8 @@ cannot reach. Read this before changing anything.
 - **`lib/Mirror.ps1`** - builds and prunes the hardlink mirror.
 - **`lib/Wrapper.ps1`** - the C# wrapper source and its compile step.
 - **`lib/Get-ExeIcon.ps1`** - optional: extracts Chrome's icon. Dot-sourced if present.
+- **`tests/Test-WrapperFlags.ps1`** - asserts which flags the wrapper injects, against a
+  throwaway mirror. Self-contained, touches only `%TEMP%`.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -60,6 +62,20 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 - **Flags are tokens, not substrings.** The wrapper must match an argument that
   *starts with* a flag. A plain `IndexOf` lets a URL like
   `https://x/?q=--type=renderer` masquerade as a flag and silently kill the port.
+- **Keep `--enable-features=CDPScreenshotNewSurface`.** It is not a preference. CDP
+  `Page.captureScreenshot` queues a `viz::CopyOutputRequest` against the renderer's
+  current `LocalSurfaceId`; that request is dequeued only when the window draws or a
+  surface with a newer id activates. A **minimised** window does neither, so the
+  request is never answered - no error, no timeout, the CDP call hangs forever and
+  takes the MCP tool call with it. The feature allocates a new `LocalSurfaceId` per
+  capture, which is precisely the dequeue event. Measured on 151.0.7922.138: 5/5
+  stalls without it, 0/5 with it, ~42ms and no memory growth over 200 captures.
+  Chromium ships it `FEATURE_DISABLED_BY_DEFAULT` and still does on trunk
+  (crbug.com/377715191), so nothing fixes this for us. Do not "fix" a stall with
+  `fromSurface:false` - while minimised that returns an all-white PNG, which is
+  worse than hanging. The trigger is minimisation only: occluded and off-screen
+  windows capture fine, because `kApplyNativeOcclusionToCompositor` is off by
+  default and such windows keep drawing.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before
@@ -81,6 +97,8 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 
 ## Testing a change (without touching your real install)
 
+0. If you touched `$wrapperSrc`, run `./tests/Test-WrapperFlags.ps1` first - it compiles
+   the wrapper for real and asserts the injected flag set in seconds.
 1. Point both roots at throwaway directories:
    `$env:CHROME_FIXED_PORT_DIR`, `$env:CHROME_FIXED_PORT_MIRROR`.
 2. Seed the fake Application dir with a **genuine signed** launcher (copy one out of a

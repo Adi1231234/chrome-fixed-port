@@ -19,8 +19,9 @@ cannot reach. Read this before changing anything.
   throwaway mirror. Self-contained, touches only `%TEMP%`.
 - **`tests/Test-ProxySync.ps1`** - asserts `chrome_proxy.exe` ends up naming a version
   directory that exists, and that a bad candidate is refused.
-- **`tests/Test-RenameTrigger.ps1`** - asserts Chrome's own rename is armed exactly when
-  an update is staged, disarmed once it finishes, and never invalidates the mirror.
+- **`tests/Test-RenameTrigger.ps1`** - asserts the rename is armed when an update is
+  staged, disarmed once it finishes, and never invalidates the mirror.
+- **`tests/Test-RenameSafety.ps1`** - asserts we never arm a rename that evicts the wrapper.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -73,10 +74,10 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   surface with a newer id activates. A **minimised** window does neither, so the
   request is never answered - no error, no timeout, the CDP call hangs forever and
   takes the MCP tool call with it. The feature allocates a new `LocalSurfaceId` per
-  capture, which is precisely the dequeue event. Measured on 151.0.7922.138: 5/5
-  stalls without it, 0/5 with it, ~42ms and no memory growth over 200 captures.
-  Chromium ships it `FEATURE_DISABLED_BY_DEFAULT` and still does on trunk
-  (crbug.com/377715191), so nothing fixes this for us. Do not "fix" a stall with
+  capture, the dequeue event. Measured on 151.0.7922.138: 5/5 stalls without it, 0/5
+  with it, ~42ms and no memory growth over 200 captures. Chromium ships it
+  `FEATURE_DISABLED_BY_DEFAULT`, still does on trunk (crbug.com/377715191), so nothing
+  fixes this for us. Do not "fix" a stall with
   `fromSurface:false` - while minimised that returns an all-white PNG, which is
   worse than hanging. The trigger is minimisation only: occluded and off-screen
   windows capture fine, because `kApplyNativeOcclusionToCompositor` is off by
@@ -84,25 +85,25 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 - **Let Chrome finish its own update; cover the proxy anyway.** Chrome's rename step
   moves `new_chrome.exe` -> `chrome.exe` AND `new_chrome_proxy.exe` ->
   `chrome_proxy.exe`, re-registers `chrome_wer.dll` and prunes old versions. It runs
-  that step on exactly one test, pinned against the shipping binary with six trace
-  variants: `PathExists(base::DIR_EXE + "new_chrome.exe")`. It is sensitive to the
-  exact name and the exact directory, and indifferent to what it finds - an empty
-  file or even a directory satisfies it. `DIR_EXE` is the **running** binary's
-  directory, which here is the mirror, and `Sync-Mirror` links only `chrome.exe` plus
-  the version directory. So the test is false forever and the whole step is skipped.
-  `Sync-PendingRename` restores the precondition by linking the staged
-  `new_chrome.exe` into the mirror, so Chrome performs its real rename and everything
-  it finalises stays correct, including parts we do not model. `Sync-ChromeProxy`
-  additionally does the proxy half immediately, so no machine is exposed while waiting
-  for the next browser start. Without them `chrome_proxy.exe` freezes and **every PWA
-  shortcut dies** once Google prunes the version directory its manifest names - it
-  declares a hard side-by-side dependency on an assembly named after its own
-  `FileVersion`, so Windows refuses to start it ("the side-by-side configuration is
-  incorrect"). Measured in the wild: stranded on 151.0.7922.109, killed at
-  2026-08-20 21:51:12 when `delete_old_versions.cc` removed that directory. Pruning
-  does **not** wait for the rename - `install.cc:489` runs `DeleteOldVersions`
-  in-process on every install - so a stranded proxy breaks on a schedule, not by
-  chance.
+  that step on one test, pinned against the shipping binary with six trace variants:
+  `PathExists(base::DIR_EXE + "new_chrome.exe")` - sensitive to the exact name and
+  directory, indifferent to what it finds (an empty file, even a directory, satisfies
+  it). `DIR_EXE` is the **running** binary's directory, here the mirror, and
+  `Sync-Mirror` links only `chrome.exe` plus the version directory, so the test is
+  false forever and the step is skipped. `Sync-PendingRename` restores the
+  precondition by linking the staged `new_chrome.exe` into the mirror, so Chrome does
+  its real rename and everything it finalises stays correct, including parts we do not
+  model. **Only arm once that file is the wrapper:** the rename *moves* it onto
+  `chrome.exe`, and STEP 5 leaves it genuine while its version is unmirrored, so
+  arming then would evict the wrapper and drop the debug port until the next run.
+  `Sync-ChromeProxy` does the proxy half immediately, so nothing is exposed while
+  waiting for that browser start. Without them `chrome_proxy.exe` freezes and **every
+  PWA shortcut dies** once Google prunes the version directory its manifest names -
+  Windows refuses to start it at all ("the side-by-side configuration is incorrect").
+  Measured: stranded on 151.0.7922.109, killed 2026-08-20 21:51:12 by
+  `delete_old_versions.cc`. Pruning does **not** wait for the rename
+  (`install.cc:489` runs `DeleteOldVersions` in-process on every install), so a
+  stranded proxy breaks on a schedule, not by chance.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before

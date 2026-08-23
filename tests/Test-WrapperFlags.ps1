@@ -56,6 +56,14 @@ $cases = @(
                         $l -notmatch 'CDPScreenshotNewSurface' } }
 )
 
+# Sync-PendingRename parks a new_chrome.exe in the mirror to make Chrome finish its own
+# rename. The wrapper resolves the mirror by scanning that same directory, so prove the
+# extra file does not confuse it into refusing to launch.
+Set-Content -Path (Join-Path $vd 'new_chrome.exe') -Value 'trigger' -Encoding ASCII
+$cases += @{ Name = 'a pending-rename trigger in the mirror does not break resolution'
+             Line = (Get-LaunchLine)
+             Test = { param($l) $l -match '--remote-debugging-port=9225' } }
+
 $failed = 0
 foreach ($c in $cases) {
   $ok = & $c.Test $c.Line

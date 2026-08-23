@@ -22,20 +22,31 @@
 #                       is never left exposed while waiting for that restart.
 
 # Arm (or disarm) Chrome's own rename by mirroring the staged new_chrome.exe.
-# We link the REAL staged binary rather than a placeholder: the test happens to be a
-# bare existence check today, but a link to the genuine, version-stamped executable
-# keeps working if that ever tightens.
+# We link the staged binary itself rather than a placeholder: the test happens to be a
+# bare existence check today, but a link to a real, version-stamped executable keeps
+# working if that ever tightens.
+#
+# Arming is only safe once STEP 5 has primed new_chrome.exe with the wrapper. The
+# rename MOVES that file onto chrome.exe, so arming while it is still Google's genuine
+# launcher would hand Chrome's own binary the wrapper's job and silently drop
+# --remote-debugging-port until the next run. STEP 5 deliberately leaves it genuine
+# whenever its version is not mirrored yet, so this is a state that really occurs.
 function Sync-PendingRename($dir, $mirrorVersion) {
   $staged  = [IO.Path]::Combine($dir, 'new_chrome.exe')
   $trigger = Join-Path (Join-Path (Get-MirrorRoot) $mirrorVersion) 'new_chrome.exe'
 
-  if (-not (Test-Path $staged)) {
+  $armable = (Test-Path $staged) -and -not (Test-Google $staged)
+
+  if (-not $armable) {
     if (Test-Path $trigger) {
       try {
         Remove-Item $trigger -Force -ErrorAction Stop
-        Log 'update finished - removed the pending-rename trigger from the mirror' 'ACT'
+        Log 'removed the pending-rename trigger from the mirror' 'ACT'
       }
       catch { Log "could not remove the pending-rename trigger: $($_.Exception.Message)" 'WARN' }
+    }
+    if ((Test-Path $staged) -and (Test-Google $staged)) {
+      Log 'new_chrome.exe is still genuine - not arming the rename, it would evict the wrapper' 'WARN'
     }
     return
   }

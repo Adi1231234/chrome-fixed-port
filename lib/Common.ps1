@@ -57,3 +57,11 @@ function Get-LiveProcessCount($dir) {
   return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d, 'OrdinalIgnoreCase') }).Count
 }
+
+# Replace $dst by REMOVING it first. Overwriting in place would write through any
+# hardlink we already made to it and corrupt the mirror; unlinking leaves the
+# mirror's link as the file's sole owner, untouched.
+function Set-FileFresh($src, $dst) {
+  if (Test-Path $dst) { Remove-Item $dst -Force -ErrorAction Stop }
+  Copy-Item $src $dst -Force -ErrorAction Stop
+}

@@ -10,7 +10,7 @@
 $WRAPPER_VER = '6'   # bump when $wrapperSrc changes, to force a reinstall
 
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
-foreach ($m in 'Common', 'Wrapper', 'Mirror') { . (Join-Path $here "lib\$m.ps1") }
+foreach ($m in 'Common', 'Wrapper', 'Mirror', 'Proxy') { . (Join-Path $here "lib\$m.ps1") }
 $optionalIcon = Join-Path $here 'lib\Get-ExeIcon.ps1'
 if (Test-Path $optionalIcon) { . $optionalIcon }
 
@@ -21,14 +21,6 @@ $dir = Get-ChromeDir
 $exe       = [IO.Path]::Combine($dir, 'chrome.exe')
 $newChrome = [IO.Path]::Combine($dir, 'new_chrome.exe')
 $marker    = [IO.Path]::Combine($dir, '.wrapper_ver')
-
-# Replace $dst by REMOVING it first. Overwriting in place would write through any
-# hardlink we already made to it and corrupt the mirror; unlinking leaves the
-# mirror's link as the file's sole owner, untouched.
-function Set-FileFresh($src, $dst) {
-  if (Test-Path $dst) { Remove-Item $dst -Force -ErrorAction Stop }
-  Copy-Item $src $dst -Force -ErrorAction Stop
-}
 
 # Every genuine Chrome launcher we can currently see, as version -> path.
 # chrome_real_*.exe is both the previous design's name and our rebuild seed.
@@ -119,11 +111,16 @@ try {
     else { Log "new_chrome.exe v$ncv is not mirrored yet - leaving it genuine this run" 'WARN' }
   }
 
-  # STEP 6: drop mirrors nothing runs from any more. This is what reclaims disk:
+  # STEP 6: finish the half of Chrome's rename it never gets to run. Left alone,
+  # chrome_proxy.exe rots at an old version and every PWA shortcut dies with a
+  # side-by-side error once Google prunes that version directory. See lib/Proxy.ps1.
+  Sync-ChromeProxy $dir
+
+  # STEP 7: drop mirrors nothing runs from any more. This is what reclaims disk:
   # once Google removed its own name, our hardlink is the data's last reference.
   Remove-StaleMirror $keep
 
-  # STEP 7: keep exactly one genuine launcher beside Chrome as a rebuild seed,
+  # STEP 8: keep exactly one genuine launcher beside Chrome as a rebuild seed,
   # hardlinked from the mirror so it costs nothing. Without it the mirror's own
   # chrome.exe is the ONLY genuine launcher on the machine, and losing it leaves
   # the tool with nothing to rebuild from.

@@ -13,9 +13,12 @@ cannot reach. Read this before changing anything.
 - **`lib/Common.ps1`** - logging, path resolution, version parsing, and the guards.
 - **`lib/Mirror.ps1`** - builds and prunes the hardlink mirror.
 - **`lib/Wrapper.ps1`** - the C# wrapper source and its compile step.
+- **`lib/Proxy.ps1`** - finishes the half of Chrome's rename that never runs for us.
 - **`lib/Get-ExeIcon.ps1`** - optional: extracts Chrome's icon. Dot-sourced if present.
 - **`tests/Test-WrapperFlags.ps1`** - asserts which flags the wrapper injects, against a
   throwaway mirror. Self-contained, touches only `%TEMP%`.
+- **`tests/Test-ProxySync.ps1`** - asserts `chrome_proxy.exe` ends up naming a version
+  directory that exists, and that a bad candidate is refused.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -76,6 +79,19 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   worse than hanging. The trigger is minimisation only: occluded and off-screen
   windows capture fine, because `kApplyNativeOcclusionToCompositor` is off by
   default and such windows keep drawing.
+- **Finish Chrome's rename yourself.** Chrome swaps `new_chrome.exe` -> `chrome.exe`
+  and `new_chrome_proxy.exe` -> `chrome_proxy.exe` in one step, and that step never
+  runs under this design: `upgrade_util::IsUpdatePendingRestart()` looks for
+  `new_chrome.exe` next to the **running** binary (`base::DIR_EXE`), which is our
+  mirror, and the mirror never contains one. So the browser never asks the installer
+  to rename anything. We already compensate for `chrome.exe` by reinstalling a freshly
+  stamped wrapper every run; `Sync-ChromeProxy` compensates for the other half.
+  Without it `chrome_proxy.exe` freezes at whatever version it had when we were
+  installed, and **every PWA / app shortcut dies** the moment Google prunes that
+  version directory - its manifest declares a hard side-by-side dependency on an
+  assembly named after its own `FileVersion`, so Windows refuses to start it at all
+  ("the side-by-side configuration is incorrect"). Measured in the wild: a proxy
+  stranded on 151.0.7922.109 while Chrome had moved to .173.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before
@@ -87,8 +103,11 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   is retried next run. Never write a partial or guessed state.
 - **Idempotent.** Re-running must converge. The `.wrapper_ver` marker holds
   `<WRAPPER_VER>|<stamped version>`; bump `$WRAPPER_VER` only when `$wrapperSrc` changes.
-- **Cleanup is surgical.** Only ever touch our own mirror directories and the legacy
-  `chrome_real_*.exe`. Never `chrome_proxy.exe` or any other genuine Chrome file.
+- **Cleanup is surgical.** Only ever *delete* our own mirror directories and the legacy
+  `chrome_real_*.exe`. Never delete `chrome_proxy.exe` or any other genuine Chrome file.
+  `Sync-ChromeProxy` is the one exception that proves the rule: it *replaces*
+  `chrome_proxy.exe` with Google's own staged `new_chrome_proxy.exe`, never with
+  anything we made, and only after `Test-Google` passes.
 - **No hardcoded user paths, no secrets.** Everything derives from `%LOCALAPPDATA%`
   or the `CHROME_FIXED_PORT_DIR` / `CHROME_FIXED_PORT_MIRROR` / `CHROME_WRAP_OVERRIDE`
   overrides.
@@ -99,6 +118,7 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 
 0. If you touched `$wrapperSrc`, run `./tests/Test-WrapperFlags.ps1` first - it compiles
    the wrapper for real and asserts the injected flag set in seconds.
+   If you touched `lib/Proxy.ps1`, run `./tests/Test-ProxySync.ps1` too.
 1. Point both roots at throwaway directories:
    `$env:CHROME_FIXED_PORT_DIR`, `$env:CHROME_FIXED_PORT_MIRROR`.
 2. Seed the fake Application dir with a **genuine signed** launcher (copy one out of a

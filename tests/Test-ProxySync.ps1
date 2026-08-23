@@ -4,7 +4,7 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 . "$repo\lib\Common.ps1"
-. "$repo\lib\Proxy.ps1"
+. "$repo\lib\Update.ps1"
 
 # A real, Google-signed proxy to seed cases with. Skip cleanly if this machine has none.
 $realProxy = "$env:LOCALAPPDATA\Google\Chrome\Application\chrome_proxy.exe"

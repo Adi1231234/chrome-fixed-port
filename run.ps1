@@ -10,7 +10,7 @@
 $WRAPPER_VER = '6'   # bump when $wrapperSrc changes, to force a reinstall
 
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
-foreach ($m in 'Common', 'Wrapper', 'Mirror', 'Proxy') { . (Join-Path $here "lib\$m.ps1") }
+foreach ($m in 'Common', 'Wrapper', 'Mirror', 'Update') { . (Join-Path $here "lib\$m.ps1") }
 $optionalIcon = Join-Path $here 'lib\Get-ExeIcon.ps1'
 if (Test-Path $optionalIcon) { . $optionalIcon }
 
@@ -111,10 +111,11 @@ try {
     else { Log "new_chrome.exe v$ncv is not mirrored yet - leaving it genuine this run" 'WARN' }
   }
 
-  # STEP 6: finish the half of Chrome's rename it never gets to run. Left alone,
-  # chrome_proxy.exe rots at an old version and every PWA shortcut dies with a
-  # side-by-side error once Google prunes that version directory. See lib/Proxy.ps1.
-  Sync-ChromeProxy $dir
+  # STEP 6: finish the update Chrome cannot finish for itself. Its rename step is
+  # gated on new_chrome.exe existing beside the RUNNING binary, which is our mirror,
+  # so it never runs - and chrome_proxy.exe rots until a PWA shortcut dies with a
+  # side-by-side error. See lib/Update.ps1.
+  Complete-ChromeUpdate $dir $newest
 
   # STEP 7: drop mirrors nothing runs from any more. This is what reclaims disk:
   # once Google removed its own name, our hardlink is the data's last reference.

@@ -105,6 +105,14 @@ installer gets wrong by asking only for read.
   no error, no timeout - so any agent driving the browser stalls until you restore the
   window. Chromium ships the fix disabled by default (crbug.com/377715191). Skipped if
   you pass your own `--enable-features`, since Chrome honours only one such flag.
+- `run.ps1` finishes the update Chrome cannot finish here. Chrome decides whether an
+  update is pending by looking for `new_chrome.exe` next to the *running* binary, and
+  ours runs from the mirror, so its rename step never fires. `run.ps1` links the staged
+  `new_chrome.exe` into the mirror so Chrome performs that rename itself, and also
+  swaps `new_chrome_proxy.exe` into `chrome_proxy.exe` directly so nothing is exposed
+  in the meantime. Left alone, `chrome_proxy.exe` freezes at an old version and every
+  PWA shortcut fails to start with "the side-by-side configuration is incorrect" once
+  Google prunes the version directory it names.
 - `CHROME_FIXED_PORT_DIR` overrides Chrome's Application directory (for testing).
 - `CHROME_FIXED_PORT_MIRROR` overrides the mirror root (for testing).
 - `$WRAPPER_VER` + the `.wrapper_ver` marker (`<ver>|<stamped version>`) force a reinstall.

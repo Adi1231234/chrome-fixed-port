@@ -45,7 +45,7 @@ function New-Link($target, $link) {
   }
 }
 
-function Get-MirrorLauncher($version) { Join-Path (Join-Path (Get-MirrorRoot) $version) 'chrome.exe' }
+function Get-MirrorLauncher($version) { Join-Path (Join-Path (Get-MirrorRoot) $version) $MirrorLauncher }
 
 # Build <mirror root>\<version>\ from Chrome's <version>\ plus a genuine launcher.
 # Idempotent: existing links are left alone, missing ones are filled in, so an
@@ -58,7 +58,7 @@ function Sync-Mirror($chromeDir, $version, $launcher) {
   $srcDir = (Get-Item (Join-Path $chromeDir $version)).FullName   # canonical case, so rebasing is exact
   $root     = Join-Path (Get-MirrorRoot) $version
   $dstDir   = Join-Path $root $version
-  $dstExe   = Join-Path $root 'chrome.exe'
+  $dstExe   = Join-Path $root $MirrorLauncher
   $sentinel = Join-Path $root $MirrorSentinel
 
   # Drop the completion marker up front: while we are mid-sync the mirror is not
@@ -95,7 +95,7 @@ function Sync-Mirror($chromeDir, $version, $launcher) {
 # the files a renderer actually needs are all present.
 function Test-Mirror($version) {
   $root = Join-Path (Get-MirrorRoot) $version
-  if (-not (Test-Path (Join-Path $root 'chrome.exe')))     { return $false }
+  if (-not (Test-Path (Join-Path $root $MirrorLauncher)))  { return $false }
   if (-not (Test-Path (Join-Path $root $MirrorSentinel)))  { return $false }
   foreach ($f in $RequiredFiles) { if (-not (Test-Path (Join-Path (Join-Path $root $version) $f))) { return $false } }
   return $true

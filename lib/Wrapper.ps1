@@ -35,9 +35,9 @@ class Wrapper {
     return false;
   }
   static string MirrorRoot(){
-    string o=Environment.GetEnvironmentVariable("CHROME_FIXED_PORT_MIRROR");
+    string o=Environment.GetEnvironmentVariable("__MIRRORENV__");
     if(!string.IsNullOrEmpty(o)) return o;
-    return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ChromeFixedPort");
+    return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"__MIRRORDIR__");
   }
   // Newest complete mirror. The completion marker matters: without it a
   // half-built mirror (interrupted sync) would look launchable and the browser
@@ -98,10 +98,13 @@ class Wrapper {
 # substituted in, so the wrapper and Sync-Mirror cannot describe different layouts.
 # Everything downstream must hash THIS, not the template - see Get-WrapperFingerprint.
 function Get-WrapperSource {
-  foreach ($v in $MirrorLauncher, $MirrorSentinel) {
+  foreach ($v in $MirrorRootEnv, $MirrorRootName, $MirrorLauncher, $MirrorSentinel) {
     if ([string]::IsNullOrWhiteSpace($v) -or $v.Contains('"') -or $v.Contains('\')) {
       throw "mirror layout value '$v' is not safe to embed in the wrapper source"
     }
   }
-  return $wrapperSrc.Replace('__LAUNCHER__', $MirrorLauncher).Replace('__SENTINEL__', $MirrorSentinel)
+  return $wrapperSrc.Replace('__MIRRORENV__', $MirrorRootEnv).
+                    Replace('__MIRRORDIR__', $MirrorRootName).
+                    Replace('__LAUNCHER__',  $MirrorLauncher).
+                    Replace('__SENTINEL__',  $MirrorSentinel)
 }

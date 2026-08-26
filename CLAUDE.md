@@ -94,8 +94,11 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   bitten: `install.ps1`'s file list vs `lib/`, `$WRAPPER_VER` vs `$wrapperSrc`, and the
   mirror layout vs the C# wrapper. All three are now derived, so nothing is left to keep
   in sync: the installer ships the branch archive, the wrapper's identity hashes the
-  source it compiles, and `$MirrorLauncher` / `$MirrorSentinel` live once in
-  `lib/Common.ps1` and are substituted into the C#. A test that catches divergence is
+  source it compiles, and the mirror's location *and* layout - `$MirrorRootEnv`,
+  `$MirrorRootName`, `$MirrorLauncher`, `$MirrorSentinel` - live once in
+  `lib/Common.ps1` and are substituted into the C#. Finding them took a mechanical
+  sweep for literals written in two files, not judgement: the first pass missed the
+  location entirely and left `Get-MirrorLauncher` still hardcoding its own name. A test that catches divergence is
   the weaker answer - it lets both copies live. Deleting one is the stronger one. And
   whatever the wrapper is generated from must be what the fingerprint hashes, or a new
   layout compiles into a wrapper the marker calls already installed.

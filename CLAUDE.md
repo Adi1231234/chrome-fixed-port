@@ -22,6 +22,8 @@ cannot reach. Read this before changing anything.
 - **`tests/Test-RenameTrigger.ps1`** - asserts the rename is armed when an update is
   staged, disarmed once it finishes, and never invalidates the mirror.
 - **`tests/Test-RenameSafety.ps1`** - asserts we never arm a rename that evicts the wrapper.
+- **`tests/Test-Bootstrap.ps1`** - asserts `install.ps1` actually ships every `lib/`
+  module `run.ps1` loads, checked against the published archive.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -68,42 +70,36 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 - **Flags are tokens, not substrings.** The wrapper must match an argument that
   *starts with* a flag. A plain `IndexOf` lets a URL like
   `https://x/?q=--type=renderer` masquerade as a flag and silently kill the port.
-- **Keep `--enable-features=CDPScreenshotNewSurface`.** It is not a preference. CDP
-  `Page.captureScreenshot` queues a `viz::CopyOutputRequest` against the renderer's
-  current `LocalSurfaceId`; that request is dequeued only when the window draws or a
-  surface with a newer id activates. A **minimised** window does neither, so the
-  request is never answered - no error, no timeout, the CDP call hangs forever and
-  takes the MCP tool call with it. The feature allocates a new `LocalSurfaceId` per
-  capture, the dequeue event. Measured on 151.0.7922.138: 5/5 stalls without it, 0/5
-  with it, ~42ms and no memory growth over 200 captures. Chromium ships it
-  `FEATURE_DISABLED_BY_DEFAULT`, still does on trunk (crbug.com/377715191), so nothing
-  fixes this for us. Do not "fix" a stall with
-  `fromSurface:false` - while minimised that returns an all-white PNG, which is
-  worse than hanging. The trigger is minimisation only: occluded and off-screen
-  windows capture fine, because `kApplyNativeOcclusionToCompositor` is off by
-  default and such windows keep drawing.
-- **Let Chrome finish its own update; cover the proxy anyway.** Chrome's rename step
-  moves `new_chrome.exe` -> `chrome.exe` AND `new_chrome_proxy.exe` ->
-  `chrome_proxy.exe`, re-registers `chrome_wer.dll` and prunes old versions. It runs
-  that step on one test, pinned against the shipping binary with six trace variants:
-  `PathExists(base::DIR_EXE + "new_chrome.exe")` - sensitive to the exact name and
-  directory, indifferent to what it finds (an empty file, even a directory, satisfies
-  it). `DIR_EXE` is the **running** binary's directory, here the mirror, and
-  `Sync-Mirror` links only `chrome.exe` plus the version directory, so the test is
-  false forever and the step is skipped. `Sync-PendingRename` restores the
-  precondition by linking the staged `new_chrome.exe` into the mirror, so Chrome does
-  its real rename and everything it finalises stays correct, including parts we do not
-  model. **Only arm once that file is the wrapper:** the rename *moves* it onto
-  `chrome.exe`, and STEP 5 leaves it genuine while its version is unmirrored, so
-  arming then would evict the wrapper and drop the debug port until the next run.
-  `Sync-ChromeProxy` does the proxy half immediately, so nothing is exposed while
-  waiting for that browser start. Without them `chrome_proxy.exe` freezes and **every
-  PWA shortcut dies** once Google prunes the version directory its manifest names -
-  Windows refuses to start it at all ("the side-by-side configuration is incorrect").
-  Measured: stranded on 151.0.7922.109, killed 2026-08-20 21:51:12 by
-  `delete_old_versions.cc`. Pruning does **not** wait for the rename
-  (`install.cc:489` runs `DeleteOldVersions` in-process on every install), so a
-  stranded proxy breaks on a schedule, not by chance.
+- **Keep `--enable-features=CDPScreenshotNewSurface`.** CDP `Page.captureScreenshot`
+  queues a `viz::CopyOutputRequest` against the renderer's current `LocalSurfaceId`,
+  dequeued only when the window draws or a newer surface activates. A **minimised**
+  window does neither, so the call hangs forever - no error, no timeout - taking the
+  MCP tool call with it. The feature allocates a new `LocalSurfaceId` per capture, the
+  dequeue event. Measured on 151.0.7922.138: 5/5 stalls without, 0/5 with, ~42ms and no
+  memory growth over 200 captures. Chromium ships it `FEATURE_DISABLED_BY_DEFAULT`,
+  still does on trunk (crbug.com/377715191). Do not "fix" a stall with
+  `fromSurface:false` - while minimised that returns an all-white PNG. Occluded and
+  off-screen windows are fine; only minimisation triggers it.
+- **Let Chrome finish its own update; cover the proxy anyway.** Chrome's rename moves
+  `new_chrome.exe` -> `chrome.exe` AND `new_chrome_proxy.exe` -> `chrome_proxy.exe`,
+  re-registers `chrome_wer.dll` and prunes old versions. It runs that step on one test,
+  pinned with six trace variants: `PathExists(base::DIR_EXE + "new_chrome.exe")` -
+  sensitive to the exact name and directory, indifferent to what it finds. `DIR_EXE` is
+  the **running** binary's directory, here the mirror, which `Sync-Mirror` never gives a
+  `new_chrome.exe`. So the step is skipped forever. `Sync-PendingRename` restores the
+  precondition so Chrome does its real rename and finalises everything, including parts
+  we do not model. **Only arm once that file is the wrapper:** the rename *moves* it
+  onto `chrome.exe`, and STEP 5 leaves it genuine while its version is unmirrored, so
+  arming then evicts the wrapper and drops the debug port. `Sync-ChromeProxy` does the
+  proxy half immediately, so nothing is exposed while waiting for that browser start.
+  Without them `chrome_proxy.exe` freezes and **every PWA shortcut dies** once Google
+  prunes the version directory its manifest names. Measured: stranded on
+  151.0.7922.109, killed 2026-08-20 21:51:12. Pruning does **not** wait for the rename
+  (`install.cc:489` runs `DeleteOldVersions` in-process on every install).
+- **`install.ps1` ships the whole tree, never a file list.** It used to name each file
+  to download, and that list drifted the moment `lib/` grew: a new module went
+  unlisted, every scheduled run fetched an incomplete `lib/`, and `run.ps1` died on the
+  dot-source *after* installing the wrapper. It now downloads the branch archive.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before
@@ -129,7 +125,8 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 
 ## Testing a change (without touching your real install)
 
-0. If you touched `$wrapperSrc`, run `./tests/Test-WrapperFlags.ps1` first - it compiles
+0. If you touched `install.ps1` or added a `lib/` module, run
+   `./tests/Test-Bootstrap.ps1`. If you touched `$wrapperSrc`, run `./tests/Test-WrapperFlags.ps1` - it compiles
    the wrapper for real and asserts the injected flag set in seconds.
    If you touched `lib/Update.ps1`, run `./tests/Test-ProxySync.ps1` and
    `./tests/Test-RenameTrigger.ps1` too.

@@ -1,9 +1,14 @@
-# One-line bootstrap. Downloads run.ps1 (+ lib/) to a temp folder, runs it once, cleans up.
+# One-line bootstrap. Downloads the repo to a temp folder, runs run.ps1 once, cleans up.
 #
 #   irm https://raw.githubusercontent.com/Adi1231234/chrome-fixed-port/main/install.ps1 | iex
 #
-# run.ps1 is the tool; lib/Get-ExeIcon.ps1 gives it Chrome's icon. It only applies the
+# run.ps1 is the tool; it needs the whole lib/ folder beside it. It only applies the
 # wrapper - scheduling it to run periodically is up to you. Safe to re-run (idempotent).
+#
+# We fetch the branch archive rather than a hand-written list of files. That list drifted
+# once: lib/Update.ps1 was added to the repo and not to the list, so every scheduled run
+# downloaded an incomplete lib/, run.ps1 failed to dot-source it, and the run died after
+# installing the wrapper but before finishing the update. An archive cannot drift.
 #
 # A failing run.ps1 is re-raised as a terminating error, so a scheduled task running
 # this one-liner reports failure instead of silently succeeding. It throws rather than
@@ -12,8 +17,6 @@
 $ErrorActionPreference = 'Stop'
 $repo   = 'Adi1231234/chrome-fixed-port'
 $branch = 'main'
-# keep run.ps1 and its lib/ together; Get-ExeIcon.ps1 is the only optional one
-$files  = 'run.ps1', 'lib/Common.ps1', 'lib/Mirror.ps1', 'lib/Wrapper.ps1', 'lib/Get-ExeIcon.ps1'
 
 # TLS 1.2 for stock Windows PowerShell 5.1.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
@@ -22,12 +25,17 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("cfp-" + [System.Guid]::NewG
 New-Item -ItemType Directory -Force $tmp | Out-Null
 try {
     Write-Host "Downloading chrome-fixed-port ($repo@$branch)..." -ForegroundColor Cyan
-    foreach ($f in $files) {
-        $dest = Join-Path $tmp ($f -replace '/', '\')
-        New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$repo/$branch/$f" -OutFile $dest -UseBasicParsing
-    }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tmp 'run.ps1')
+    $zip = Join-Path $tmp 'src.zip'
+    Invoke-WebRequest -Uri "https://codeload.github.com/$repo/zip/refs/heads/$branch" -OutFile $zip -UseBasicParsing
+    Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
+
+    # GitHub names the archive root <repo>-<branch>; find it rather than assuming.
+    $run = Get-ChildItem $tmp -Filter 'run.ps1' -Recurse -File | Select-Object -First 1
+    if (-not $run) { throw "chrome-fixed-port: run.ps1 not found in the downloaded archive" }
+    $lib = Join-Path $run.DirectoryName 'lib'
+    if (-not (Test-Path $lib)) { throw "chrome-fixed-port: lib/ not found beside run.ps1" }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $run.FullName
     $code = $LASTEXITCODE
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

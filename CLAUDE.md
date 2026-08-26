@@ -17,13 +17,13 @@ cannot reach. Read this before changing anything.
 - **`lib/Get-ExeIcon.ps1`** - optional: extracts Chrome's icon. Dot-sourced if present.
 - **`tests/Test-WrapperFlags.ps1`** - asserts which flags the wrapper injects, against a
   throwaway mirror. Self-contained, touches only `%TEMP%`.
-- **`tests/Test-ProxySync.ps1`** - asserts `chrome_proxy.exe` ends up naming a version
-  directory that exists, and that a bad candidate is refused.
-- **`tests/Test-RenameTrigger.ps1`** - asserts the rename is armed when an update is
-  staged, disarmed once it finishes, and never invalidates the mirror.
+- **`tests/Test-ProxySync.ps1`** - asserts `chrome_proxy.exe` names a version directory
+  that exists, and that a bad candidate is refused.
+- **`tests/Test-RenameTrigger.ps1`** - asserts the rename is armed when staged, disarmed when done.
 - **`tests/Test-RenameSafety.ps1`** - asserts we never arm a rename that evicts the wrapper.
-- **`tests/Test-Bootstrap.ps1`** - asserts `install.ps1` actually ships every `lib/`
-  module `run.ps1` loads, checked against the published archive.
+- **`tests/Test-Bootstrap.ps1`** - asserts `install.ps1` ships every `lib/` module
+  `run.ps1` loads, checked against the published archive.
+- **`tests/Test-WrapperFingerprint.ps1`** - asserts the wrapper's identity follows its source.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -96,10 +96,10 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   prunes the version directory its manifest names. Measured: stranded on
   151.0.7922.109, killed 2026-08-20 21:51:12. Pruning does **not** wait for the rename
   (`install.cc:489` runs `DeleteOldVersions` in-process on every install).
-- **`install.ps1` ships the whole tree, never a file list.** It used to name each file
-  to download, and that list drifted the moment `lib/` grew: a new module went
-  unlisted, every scheduled run fetched an incomplete `lib/`, and `run.ps1` died on the
-  dot-source *after* installing the wrapper. It now downloads the branch archive.
+- **`install.ps1` ships the whole tree, never a file list.** A named list drifted the
+  moment `lib/` grew: a new module went unlisted, every scheduled run fetched an
+  incomplete `lib/`, and `run.ps1` died on the dot-source *after* installing the
+  wrapper. It downloads the branch archive now.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before
@@ -109,8 +109,11 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   reports `0.0.0.0`, excludes nothing, and leaves Chrome's own install purgeable.
 - **Fail-safe, defer don't corrupt.** A locked or missing target logs a `WARN` and
   is retried next run. Never write a partial or guessed state.
-- **Idempotent.** Re-running must converge. The `.wrapper_ver` marker holds
-  `<WRAPPER_VER>|<stamped version>`; bump `$WRAPPER_VER` only when `$wrapperSrc` changes.
+- **Idempotent.** Re-running must converge. `.wrapper_ver` holds
+  `<wrapper fingerprint>|<stamped version>`; the fingerprint hashes `$wrapperSrc`
+  (`Get-WrapperFingerprint`), so editing the wrapper reinstalls it by itself.
+  **Never make it a literal to bump by hand** - that was the old scheme, and editing
+  `$wrapperSrc` without bumping was proven to never reach Chrome at all.
 - **Cleanup is surgical.** Only ever *delete* our own mirror directories and the legacy
   `chrome_real_*.exe`. Never delete `chrome_proxy.exe` or any other genuine Chrome file.
   `lib/Update.ps1` holds the only sanctioned exceptions: it *replaces*

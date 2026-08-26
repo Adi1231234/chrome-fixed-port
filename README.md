@@ -115,7 +115,9 @@ installer gets wrong by asking only for read.
   Google prunes the version directory it names.
 - `CHROME_FIXED_PORT_DIR` overrides Chrome's Application directory (for testing).
 - `CHROME_FIXED_PORT_MIRROR` overrides the mirror root (for testing).
-- `$WRAPPER_VER` + the `.wrapper_ver` marker (`<ver>|<stamped version>`) force a reinstall.
+- The `.wrapper_ver` marker (`<wrapper fingerprint>|<stamped version>`) forces a reinstall.
+  The fingerprint is a hash of the wrapper's own source, so editing it is enough - there
+  is no version number to remember to bump.
 - The wrapper injects `--user-data-dir=%LOCALAPPDATA%\Google\ChromeDebug`. Check whether
   that path is a junction to your real profile - if it is, the debug port drives your
   real session, and CDP has no authentication.

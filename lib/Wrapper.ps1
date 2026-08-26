@@ -99,6 +99,21 @@ class Wrapper {
 }
 '@
 
+# The identity of the wrapper we would build, derived from its source rather than
+# maintained by hand. run.ps1 stores this in .wrapper_ver, so editing $wrapperSrc
+# reinstalls the wrapper by itself. The previous scheme was a literal to bump on every
+# source change, which is a two-places-in-sync rule with nothing checking it: forget the
+# bump and the edit silently never ships. The same class of rule already broke the
+# bootstrap once, when a lib/ module was added to the repo but not to install.ps1.
+function Get-WrapperFingerprint {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($wrapperSrc))
+    return -join ($hash[0..3] | ForEach-Object { $_.ToString('x2') })
+  }
+  finally { $sha.Dispose() }
+}
+
 # Compile the wrapper in a throwaway temp dir; returns @{Exe; Tmp}. Caller removes Tmp.
 # $stamp is the version to embed. If lib/Get-ExeIcon.ps1 is loaded, Chrome's icon is
 # embedded too. Fail-safe: if embedding fails, retry the compile icon-less.

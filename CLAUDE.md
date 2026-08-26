@@ -24,6 +24,7 @@ cannot reach. Read this before changing anything.
 - **`tests/Test-Bootstrap.ps1`** - asserts `install.ps1` ships every `lib/` module
   `run.ps1` loads, checked against the published archive.
 - **`tests/Test-WrapperFingerprint.ps1`** - asserts the wrapper's identity follows its source.
+- **`tests/Run-All.ps1`** - runs every suite; reports a SKIP as loudly as a failure.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -96,10 +97,10 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   prunes the version directory its manifest names. Measured: stranded on
   151.0.7922.109, killed 2026-08-20 21:51:12. Pruning does **not** wait for the rename
   (`install.cc:489` runs `DeleteOldVersions` in-process on every install).
-- **`install.ps1` ships the whole tree, never a file list.** A named list drifted the
-  moment `lib/` grew: a new module went unlisted, every scheduled run fetched an
-  incomplete `lib/`, and `run.ps1` died on the dot-source *after* installing the
-  wrapper. It downloads the branch archive now.
+- **No invariant that a human must remember.** Three have bitten: `install.ps1`'s file
+  list vs `lib/` (a scheduled run died mid-way), `$WRAPPER_VER` vs `$wrapperSrc` (edits
+  silently never shipped), and the mirror layout, which `lib/Mirror.ps1` writes and the
+  C# wrapper hardcodes. Each is now derived or asserted, never remembered.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before
@@ -128,11 +129,9 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 
 ## Testing a change (without touching your real install)
 
-0. If you touched `install.ps1` or added a `lib/` module, run
-   `./tests/Test-Bootstrap.ps1`. If you touched `$wrapperSrc`, run `./tests/Test-WrapperFlags.ps1` - it compiles
-   the wrapper for real and asserts the injected flag set in seconds.
-   If you touched `lib/Update.ps1`, run `./tests/Test-ProxySync.ps1` and
-   `./tests/Test-RenameTrigger.ps1` too.
+0. Run `./tests/Run-All.ps1` - every suite, one summary. A **SKIPPED** suite asserts
+   nothing: a pinned Chrome version once made one skip for days unnoticed, so treat a
+   skip as a failure until you know why.
 1. Point both roots at throwaway directories:
    `$env:CHROME_FIXED_PORT_DIR`, `$env:CHROME_FIXED_PORT_MIRROR`.
 2. Seed the fake Application dir with a **genuine signed** launcher (copy one out of a

@@ -20,7 +20,13 @@ $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $fcs = Join-Path $root 'fake.cs'
 Set-Content -Path $fcs -Value $fakeSrc -Encoding UTF8
 & $csc -nologo -target:exe -out:(Join-Path $vd 'chrome.exe') $fcs | Out-Null
-New-Item -ItemType File -Path (Join-Path $vd '.mirror_complete') -Force | Out-Null
+# Build the fixture from Mirror.ps1's own constant, never a copy of the literal. The
+# compiled wrapper hardcodes this name in C#; Sync-Mirror writes it in PowerShell. Two
+# files, two languages, one contract, and nothing else checks that they still agree - so
+# if the sentinel is renamed on one side, this test must be what goes red.
+. "$repo\lib\Common.ps1"
+. "$repo\lib\Mirror.ps1"
+New-Item -ItemType File -Path (Join-Path $vd $MirrorSentinel) -Force | Out-Null
 
 . "$repo\lib\Common.ps1"
 . "$repo\lib\Wrapper.ps1"
@@ -36,7 +42,23 @@ function Get-LaunchLine([string[]]$WrapperArgs, [string]$Override) {
   if ($Override) { $env:CHROME_WRAP_OVERRIDE = $Override }
   if ($WrapperArgs) { & $built.Exe @WrapperArgs | Out-Null } else { & $built.Exe | Out-Null }
   if ($Override) { Remove-Item Env:\CHROME_WRAP_OVERRIDE }
-  return (Get-Content $out -Raw).Trim()
+  # Empty means the wrapper never launched anything - almost always because it could
+  # not resolve the fixture mirror. Return '' rather than throwing, so the assertions
+  # below report which contract broke instead of dying on a null.
+  $line = Get-Content $out -Raw
+  if ($null -eq $line) { return '' }
+  return $line.Trim()
+}
+
+# Before asserting anything about flags, prove the wrapper can resolve this fixture at
+# all. If the mirror layout in lib/Mirror.ps1 and the layout hardcoded in the C# wrapper
+# ever diverge, this is the line that must say so.
+$probe = Get-LaunchLine
+if (-not $probe) {
+  Write-Host "[FAIL] the wrapper cannot resolve the fixture mirror"
+  Write-Host "       lib/Mirror.ps1 sentinel is '$MirrorSentinel'; the C# wrapper hardcodes its own."
+  Write-Host "       If you renamed it on one side, rename it on both."
+  exit 1
 }
 
 $cases = @(

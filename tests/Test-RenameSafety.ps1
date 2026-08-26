@@ -9,12 +9,22 @@ $repo = Split-Path $PSScriptRoot -Parent
 . "$repo\lib\Mirror.ps1"
 . "$repo\lib\Update.ps1"
 
-$ver      = '151.0.7922.173'
-$genuine  = "$env:LOCALAPPDATA\ChromeFixedPort\$ver\chrome.exe"   # a real, Google-signed launcher
-if (-not (Test-Path $genuine) -or -not (Test-Google $genuine)) {
+# Seed from whatever genuine launcher this machine actually has. Never pin a version:
+# a pinned one stops existing at the next Chrome update and the suite silently skips,
+# which is how a test quietly stops protecting anything.
+$genuine = @(
+  Get-ChildItem "$env:LOCALAPPDATA\ChromeFixedPort" -Directory -ErrorAction SilentlyContinue |
+    Sort-Object { try { [version]$_.Name } catch { [version]'0.0.0.0' } } |
+    ForEach-Object { Join-Path $_.FullName 'chrome.exe' }
+  Get-ChildItem "$env:LOCALAPPDATA\Google\Chrome\Application" -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.FullName }
+) | Where-Object { (Test-Path $_) -and (Test-Google $_) } | Select-Object -Last 1
+if (-not $genuine) {
   Write-Host 'SKIP: no Google-signed launcher on this machine to seed from'
   exit 0
 }
+$ver = Get-FileVersion $genuine
+Write-Host "seeding from $genuine (v$ver)"
 $failed = 0
 function Check($name, $cond, $detail) {
   if ($cond) { Write-Host "[PASS] $name" }

@@ -18,11 +18,31 @@ Check 'run.ps1 does not hard-code $WRAPPER_VER' `
 Check 'run.ps1 derives it from the wrapper source' ($runText -match 'Get-WrapperFingerprint')
 
 # Same source in, same fingerprint out; different source in, different fingerprint out.
+. (Join-Path $repo 'lib\Common.ps1')   # the mirror layout the wrapper is generated against
 . (Join-Path $repo 'lib\Wrapper.ps1')
+. (Join-Path $repo 'lib\Build.ps1')
 $a = Get-WrapperFingerprint
 $b = Get-WrapperFingerprint
 Check 'the fingerprint is stable for unchanged source' ($a -eq $b) "$a vs $b"
 Check 'the fingerprint looks like a short hash' ($a -match '^[0-9a-f]{8}$') "got: $a"
+
+# The compiled source is the template with the mirror layout substituted in, and the
+# fingerprint must cover THAT. Hashing the bare template would let a change to
+# $MirrorSentinel produce an identical marker, so the installed wrapper would keep the
+# old layout compiled in while Mirror.ps1 wrote the new one.
+Check 'no placeholder survives substitution' ((Get-WrapperSource) -notmatch '__LAUNCHER__|__SENTINEL__')
+Check 'the compiled source carries the real sentinel' ((Get-WrapperSource) -match [regex]::Escape($MirrorSentinel))
+$layoutBase = Get-WrapperFingerprint
+$MirrorSentinel = '.mirror_moved'
+Check 'changing the mirror layout moves the fingerprint' ((Get-WrapperFingerprint) -ne $layoutBase)
+Check 'and the compiled source follows it' ((Get-WrapperSource) -match '\.mirror_moved')
+$MirrorSentinel = '.mirror_complete'
+Check 'restoring the layout restores the fingerprint' ((Get-WrapperFingerprint) -eq $layoutBase)
+$MirrorSentinel = 'bad"name'
+$rejected = $false
+try { Get-WrapperSource | Out-Null } catch { $rejected = $true }
+Check 'a value unsafe to embed in C# is rejected' $rejected
+$MirrorSentinel = '.mirror_complete'
 
 $original = $wrapperSrc
 try {

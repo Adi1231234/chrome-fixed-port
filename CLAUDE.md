@@ -7,24 +7,18 @@ cannot reach. Read this before changing anything.
 
 ## Layout
 
-- **`install.ps1`** - one-line bootstrap: downloads `run.ps1` + `lib/`, runs it once,
+- **`install.ps1`** - one-line bootstrap: downloads the branch archive, runs it once,
   cleans up. No scheduling - the user wires their own timer. Users never edit this.
-- **`run.ps1`** - thin orchestrator: mirror, install wrapper, cleanup. Needs `lib/`.
-- **`lib/Common.ps1`** - logging, path resolution, version parsing, and the guards.
+- **`run.ps1`** - thin orchestrator: mirror, install wrapper, finish the update, cleanup.
+- **`lib/Common.ps1`** - logging, paths, versions, the guards, and the mirror layout.
 - **`lib/Mirror.ps1`** - builds and prunes the hardlink mirror.
-- **`lib/Wrapper.ps1`** - the C# wrapper source and its compile step.
+- **`lib/Wrapper.ps1`** - the C# wrapper source, with the mirror layout substituted in.
+- **`lib/Build.ps1`** - the wrapper's identity (a hash of that source) and its compile.
 - **`lib/Update.ps1`** - finishes the update Chrome's own rename never gets to finish.
-- **`lib/Get-ExeIcon.ps1`** - optional: extracts Chrome's icon. Dot-sourced if present.
-- **`tests/Test-WrapperFlags.ps1`** - asserts which flags the wrapper injects, against a
-  throwaway mirror. Self-contained, touches only `%TEMP%`.
-- **`tests/Test-ProxySync.ps1`** - asserts `chrome_proxy.exe` names a version directory
-  that exists, and that a bad candidate is refused.
-- **`tests/Test-RenameTrigger.ps1`** - asserts the rename is armed when staged, disarmed when done.
-- **`tests/Test-RenameSafety.ps1`** - asserts we never arm a rename that evicts the wrapper.
-- **`tests/Test-Bootstrap.ps1`** - asserts `install.ps1` ships every `lib/` module
-  `run.ps1` loads, checked against the published archive.
-- **`tests/Test-WrapperFingerprint.ps1`** - asserts the wrapper's identity follows its source.
-- **`tests/Run-All.ps1`** - runs every suite; reports a SKIP as loudly as a failure.
+- **`lib/Get-ExeIcon.ps1`** - optional: Chrome's icon. Dot-sourced if present.
+- **`tests/Run-All.ps1`** - every suite, one summary; a SKIP is reported like a failure.
+- **`tests/Test-*.ps1`** - one suite per contract: bootstrap completeness, wrapper
+  identity, injected flags, proxy sync, rename arming, rename safety.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -74,13 +68,12 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 - **Keep `--enable-features=CDPScreenshotNewSurface`.** CDP `Page.captureScreenshot`
   queues a `viz::CopyOutputRequest` against the renderer's current `LocalSurfaceId`,
   dequeued only when the window draws or a newer surface activates. A **minimised**
-  window does neither, so the call hangs forever - no error, no timeout - taking the
-  MCP tool call with it. The feature allocates a new `LocalSurfaceId` per capture, the
-  dequeue event. Measured on 151.0.7922.138: 5/5 stalls without, 0/5 with, ~42ms and no
-  memory growth over 200 captures. Chromium ships it `FEATURE_DISABLED_BY_DEFAULT`,
-  still does on trunk (crbug.com/377715191). Do not "fix" a stall with
-  `fromSurface:false` - while minimised that returns an all-white PNG. Occluded and
-  off-screen windows are fine; only minimisation triggers it.
+  window does neither, so the call hangs forever - no error, no timeout. The feature
+  allocates a `LocalSurfaceId` per capture, the dequeue event. Measured on
+  151.0.7922.138: 5/5 stalls without, 0/5 with, ~42ms, no memory growth over 200
+  captures. Chromium ships it `FEATURE_DISABLED_BY_DEFAULT`, still does on trunk
+  (crbug.com/377715191). Never "fix" a stall with `fromSurface:false` - while minimised
+  that returns an all-white PNG. Only minimisation triggers it.
 - **Let Chrome finish its own update; cover the proxy anyway.** Chrome's rename moves
   `new_chrome.exe` -> `chrome.exe` AND `new_chrome_proxy.exe` -> `chrome_proxy.exe`,
   re-registers `chrome_wer.dll` and prunes old versions. It runs that step on one test,
@@ -97,10 +90,15 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   prunes the version directory its manifest names. Measured: stranded on
   151.0.7922.109, killed 2026-08-20 21:51:12. Pruning does **not** wait for the rename
   (`install.cc:489` runs `DeleteOldVersions` in-process on every install).
-- **No invariant that a human must remember.** Three have bitten: `install.ps1`'s file
-  list vs `lib/` (a scheduled run died mid-way), `$WRAPPER_VER` vs `$wrapperSrc` (edits
-  silently never shipped), and the mirror layout, which `lib/Mirror.ps1` writes and the
-  C# wrapper hardcodes. Each is now derived or asserted, never remembered.
+- **No invariant a human must remember; derive it, do not assert it.** Three have
+  bitten: `install.ps1`'s file list vs `lib/`, `$WRAPPER_VER` vs `$wrapperSrc`, and the
+  mirror layout vs the C# wrapper. All three are now derived, so nothing is left to keep
+  in sync: the installer ships the branch archive, the wrapper's identity hashes the
+  source it compiles, and `$MirrorLauncher` / `$MirrorSentinel` live once in
+  `lib/Common.ps1` and are substituted into the C#. A test that catches divergence is
+  the weaker answer - it lets both copies live. Deleting one is the stronger one. And
+  whatever the wrapper is generated from must be what the fingerprint hashes, or a new
+  layout compiles into a wrapper the marker calls already installed.
 - **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
   it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before

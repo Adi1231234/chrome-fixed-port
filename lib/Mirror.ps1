@@ -10,7 +10,7 @@
 # installer removes its own name for it. That is what makes a running browser
 # immune to `setup.exe --delete-old-versions`.
 
-$MirrorSentinel = '.mirror_complete'
+# $MirrorLauncher / $MirrorSentinel come from lib/Common.ps1 - see the note there.
 
 # A version directory is only worth mirroring if it can actually run a browser.
 # Google's cleanup strips everything it can and leaves the mapped .dll files

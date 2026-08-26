@@ -30,6 +30,7 @@ New-Item -ItemType File -Path (Join-Path $vd $MirrorSentinel) -Force | Out-Null
 
 . "$repo\lib\Common.ps1"
 . "$repo\lib\Wrapper.ps1"
+. "$repo\lib\Build.ps1"
 $built = New-Wrapper $ver $null
 
 $out = Join-Path $root 'out.txt'

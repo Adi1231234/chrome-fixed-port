@@ -65,3 +65,10 @@ function Set-FileFresh($src, $dst) {
   if (Test-Path $dst) { Remove-Item $dst -Force -ErrorAction Stop }
   Copy-Item $src $dst -Force -ErrorAction Stop
 }
+
+# The mirror's on-disk layout. ONE definition: lib/Mirror.ps1 writes it and the C#
+# wrapper is generated against it, so the two cannot describe different things. They
+# used to hold separate copies of these literals, in different languages, with only a
+# test standing between a rename on one side and a browser that finds no mirror.
+$MirrorLauncher = 'chrome.exe'
+$MirrorSentinel = '.mirror_complete'

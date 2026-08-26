@@ -8,7 +8,7 @@
 # from a private hardlink mirror instead. Root cause and proof: README.md.
 
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
-foreach ($m in 'Common', 'Wrapper', 'Mirror', 'Update') { . (Join-Path $here "lib\$m.ps1") }
+foreach ($m in 'Common', 'Wrapper', 'Build', 'Mirror', 'Update') { . (Join-Path $here "lib\$m.ps1") }
 $optionalIcon = Join-Path $here 'lib\Get-ExeIcon.ps1'
 if (Test-Path $optionalIcon) { . $optionalIcon }
 

@@ -18,8 +18,9 @@ function Get-ChromeDir {
 # Our private mirror root. Google's installer has no idea this exists, which is
 # the entire point: nothing in here can be classified as a stray version.
 function Get-MirrorRoot {
-  if ($env:CHROME_FIXED_PORT_MIRROR) { return $env:CHROME_FIXED_PORT_MIRROR }
-  return "$env:LOCALAPPDATA\ChromeFixedPort"
+  $o = [Environment]::GetEnvironmentVariable($MirrorRootEnv)
+  if ($o) { return $o }
+  return (Join-Path $env:LOCALAPPDATA $MirrorRootName)
 }
 
 function Test-Google($p) {
@@ -70,5 +71,7 @@ function Set-FileFresh($src, $dst) {
 # wrapper is generated against it, so the two cannot describe different things. They
 # used to hold separate copies of these literals, in different languages, with only a
 # test standing between a rename on one side and a browser that finds no mirror.
+$MirrorRootEnv  = 'CHROME_FIXED_PORT_MIRROR'
+$MirrorRootName = 'ChromeFixedPort'
 $MirrorLauncher = 'chrome.exe'
 $MirrorSentinel = '.mirror_complete'

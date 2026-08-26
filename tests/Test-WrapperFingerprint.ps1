@@ -32,7 +32,18 @@ Check 'the fingerprint looks like a short hash' ($a -match '^[0-9a-f]{8}$') "got
 # old layout compiled in while Mirror.ps1 wrote the new one.
 Check 'no placeholder survives substitution' ((Get-WrapperSource) -notmatch '__LAUNCHER__|__SENTINEL__')
 Check 'the compiled source carries the real sentinel' ((Get-WrapperSource) -match [regex]::Escape($MirrorSentinel))
+# Every value the wrapper is generated from must move the fingerprint, or a change to
+# it compiles into a wrapper the marker calls already installed. The mirror's location
+# counts as much as its layout: the C# resolves the root itself.
 $layoutBase = Get-WrapperFingerprint
+foreach ($n in 'MirrorRootEnv', 'MirrorRootName', 'MirrorLauncher', 'MirrorSentinel') {
+  $keep = (Get-Variable $n).Value
+  Set-Variable $n -Value ($keep + 'X')
+  Check "changing `$$n moves the fingerprint" ((Get-WrapperFingerprint) -ne $layoutBase)
+  Check "and `$$n reaches the compiled source" ((Get-WrapperSource) -match [regex]::Escape($keep + 'X'))
+  Set-Variable $n -Value $keep
+}
+Check 'restoring every constant restores the fingerprint' ((Get-WrapperFingerprint) -eq $layoutBase)
 $MirrorSentinel = '.mirror_moved'
 Check 'changing the mirror layout moves the fingerprint' ((Get-WrapperFingerprint) -ne $layoutBase)
 Check 'and the compiled source follows it' ((Get-WrapperSource) -match '\.mirror_moved')

@@ -7,12 +7,14 @@
 # check, so we never let a browser depend on a directory Google owns: it runs
 # from a private hardlink mirror instead. Root cause and proof: README.md.
 
-$WRAPPER_VER = '6'   # bump when $wrapperSrc changes, to force a reinstall
-
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
 foreach ($m in 'Common', 'Wrapper', 'Mirror', 'Update') { . (Join-Path $here "lib\$m.ps1") }
 $optionalIcon = Join-Path $here 'lib\Get-ExeIcon.ps1'
 if (Test-Path $optionalIcon) { . $optionalIcon }
+
+# Identity of the wrapper build, computed from lib/Wrapper.ps1's source. Never a literal:
+# a number someone has to remember to bump is a rule with no enforcement behind it.
+$WRAPPER_VER = Get-WrapperFingerprint
 
 $dir = Get-ChromeDir
 # [IO.Path]::Combine, not Join-Path: Join-Path resolves through the PowerShell

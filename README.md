@@ -11,7 +11,7 @@
 ![Install](https://img.shields.io/badge/install-one%20line-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-<sub>Replaces <code>chrome.exe</code> with a small wrapper that launches a private hardlink mirror of Chrome · costs ~0 disk · idempotent, safe to re-run.</sub>
+<sub>Windows redirects every start of <code>chrome.exe</code> to a small wrapper that launches a private hardlink mirror of Chrome · survives Chrome updates with no re-run · costs ~0 disk · idempotent, safe to re-run.</sub>
 
 </div>
 
@@ -24,7 +24,9 @@ irm https://raw.githubusercontent.com/Adi1231234/chrome-fixed-port/main/install.
 ```
 
 Downloads `run.ps1` + `lib/` to a temp folder, runs it once, cleans up. **Idempotent.**
-To stay applied across Chrome updates, **run it periodically from your own scheduled task**.
+The first run asks for admin once, to write the launch redirect. Chrome updates do not
+undo it. A periodic run from your own scheduled task only moves the mirror to the newest
+Chrome version; until then the previous version keeps opening, with the port.
 *(Cloned the repo instead? Just run `./run.ps1`.)*
 
 ## The problem this solves
@@ -62,17 +64,24 @@ excludes exactly two: the ones matching `chrome.exe` and `new_chrome.exe`'s `Fil
 Do not fight the installer for ownership of a directory. Do not depend on that
 directory at all.
 
-- **`chrome.exe`** is our wrapper. It finds the newest mirror, injects the debug
-  flags, launches it, and **waits**, returning the browser's real exit code.
+- **`chrome.exe` stays Google's.** An Image File Execution Options entry (`UseFilter`
+  + `FilterFullPath`) makes Windows run our wrapper whenever Chrome's own `chrome.exe`
+  is started - by the taskbar, a file association, a link, anything. It lives in the
+  registry, keyed by path, so a Chrome update that replaces the file does not undo it.
+- **The wrapper** (`%LOCALAPPDATA%\ChromeFixedPort\chrome-fixed-port.exe`) finds the
+  newest mirror, injects the debug flags, launches it, and **waits**, returning the
+  browser's real exit code.
 - **The mirror** lives at `%LOCALAPPDATA%\ChromeFixedPort\<version>\` and is a
   self-contained Chrome install built from **NTFS hardlinks**:
   `chrome.exe` plus `<version>\`. Google's installer has never heard of this path.
 - A hardlink is a second name for the same data. When Google unlinks its own name,
   the data survives because ours still references it. Measured: 265 links to a
   483 MB tree consumed **0.1 MB**.
-- **The wrapper carries a real `FileVersion`** (the version it launches), so Chrome's
-  own install stays excluded from its own cleanup instead of being purged as stray.
-  An unstamped wrapper reports `0.0.0.0` and excludes nothing.
+- The mirror's `chrome.exe` has the same name at a different path, so the redirect
+  never touches the running browser or the processes it spawns.
+- Earlier versions overwrote `chrome.exe` with the wrapper. Every Chrome update put
+  Google's file back, and until the next run Chrome opened without the port. A run
+  of this version undoes that and gives `chrome.exe` back to Google.
 
 ## Why a mirror can be trusted
 
@@ -82,9 +91,8 @@ Google's cleanup deletes everything it can and leaves the mapped `.dll` files
 behind - so a half-purged directory still looks populated, and mirroring one would
 faithfully reproduce a browser that dies on every new tab.
 
-One genuine launcher, `chrome_real_<newest>.exe`, is kept beside Chrome, hardlinked
-from the mirror so it costs nothing. It is the seed the mirror is rebuilt from if
-the mirror is ever damaged or deleted.
+If the mirror is ever damaged or deleted, it is rebuilt from Chrome's own `chrome.exe`,
+which is always Google's genuine launcher now.
 
 ## No file clutter
 
@@ -105,20 +113,22 @@ installer gets wrong by asking only for read.
   no error, no timeout - so any agent driving the browser stalls until you restore the
   window. Chromium ships the fix disabled by default (crbug.com/377715191). Skipped if
   you pass your own `--enable-features`, since Chrome honours only one such flag.
-- `run.ps1` finishes the update Chrome cannot finish here. Chrome decides whether an
-  update is pending by looking for `new_chrome.exe` next to the *running* binary, and
-  ours runs from the mirror, so its rename step never fires. `run.ps1` links the staged
-  `new_chrome.exe` into the mirror so Chrome performs that rename itself, and also
-  swaps `new_chrome_proxy.exe` into `chrome_proxy.exe` directly so nothing is exposed
-  in the meantime. Left alone, `chrome_proxy.exe` freezes at an old version and every
-  PWA shortcut fails to start with "the side-by-side configuration is incorrect" once
-  Google prunes the version directory it names.
+- Nothing runs Chrome's `chrome.exe` any more, so Google's installer always updates
+  `chrome.exe` and `chrome_proxy.exe` in place. The old design kept `chrome.exe` busy,
+  which made Google defer that swap to a rename step that never ran from the mirror,
+  and `chrome_proxy.exe` froze until every PWA shortcut died.
+- To remove the tool: delete the subkey `ChromeFixedPort-*` under
+  `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\chrome.exe`
+  (`Remove-LaunchRedirect` in `lib/Redirect.ps1` does it), then delete
+  `%LOCALAPPDATA%\ChromeFixedPort`. In the other order Chrome cannot start, because
+  Windows would still send it to a wrapper that is gone.
 - `CHROME_FIXED_PORT_DIR` overrides Chrome's Application directory (for testing).
 - `CHROME_FIXED_PORT_MIRROR` overrides the mirror root (for testing).
-- The `.wrapper_ver` marker (`<wrapper fingerprint>|<stamped version>`) forces a reinstall.
-  The fingerprint is a hash of the wrapper's own source, so editing it is enough - there
-  is no version number to remember to bump.
+- `chrome-fixed-port.exe.ver` beside the wrapper holds its fingerprint, a hash of the
+  wrapper's own source, so editing it is enough to reinstall - there is no version
+  number to remember to bump.
 - The wrapper injects `--user-data-dir=%LOCALAPPDATA%\Google\ChromeDebug`. Check whether
   that path is a junction to your real profile - if it is, the debug port drives your
-  real session, and CDP has no authentication.
+  real session, and CDP has no authentication. It must not be `User Data` itself:
+  Chrome 136+ ignores `--remote-debugging-port` on the default data directory path.
 - Hardlinks need one NTFS volume; `Sync-Mirror` falls back to a real copy otherwise.

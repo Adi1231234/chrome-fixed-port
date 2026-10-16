@@ -30,13 +30,13 @@ Check 'the fingerprint looks like a short hash' ($a -match '^[0-9a-f]{8}$') "got
 # fingerprint must cover THAT. Hashing the bare template would let a change to
 # $MirrorSentinel produce an identical marker, so the installed wrapper would keep the
 # old layout compiled in while Mirror.ps1 wrote the new one.
-Check 'no placeholder survives substitution' ((Get-WrapperSource) -notmatch '__LAUNCHER__|__SENTINEL__')
+Check 'no placeholder survives substitution' ((Get-WrapperSource) -notmatch '__[A-Z]+__')
 Check 'the compiled source carries the real sentinel' ((Get-WrapperSource) -match [regex]::Escape($MirrorSentinel))
 # Every value the wrapper is generated from must move the fingerprint, or a change to
 # it compiles into a wrapper the marker calls already installed. The mirror's location
 # counts as much as its layout: the C# resolves the root itself.
 $layoutBase = Get-WrapperFingerprint
-foreach ($n in 'MirrorRootEnv', 'MirrorRootName', 'MirrorLauncher', 'MirrorSentinel') {
+foreach ($n in 'MirrorRootEnv', 'MirrorRootName', 'MirrorLauncher', 'MirrorSentinel', 'ChromeImage') {
   $keep = (Get-Variable $n).Value
   Set-Variable $n -Value ($keep + 'X')
   Check "changing `$$n moves the fingerprint" ((Get-WrapperFingerprint) -ne $layoutBase)
@@ -62,12 +62,19 @@ try {
   $c = Get-WrapperFingerprint
   Check 'an edited wrapper source yields a different fingerprint' ($c -ne $a) "$a vs $c"
 
-  # and the marker run.ps1 writes must change with it, which is what forces a reinstall
-  $markerBefore = "$a|151.0.7922.174"
-  $markerAfter  = "$c|151.0.7922.174"
-  Check 'the .wrapper_ver marker changes, forcing a reinstall' ($markerBefore -ne $markerAfter)
+  # and the installed wrapper must then read as stale, which is what forces a reinstall
+  $env:CHROME_FIXED_PORT_MIRROR = Join-Path $env:TEMP ('fptest_' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force $env:CHROME_FIXED_PORT_MIRROR | Out-Null
+  Set-Content (Get-WrapperPath) 'stand-in' -Encoding ASCII
+  Set-Content (Get-WrapperMarker) $a -Encoding ASCII
+  Check 'the wrapper installed under the old source reads as current for it' (Test-WrapperCurrent $a)
+  Check 'and as stale once the source changed, forcing a reinstall' (-not (Test-WrapperCurrent $c))
 }
-finally { $wrapperSrc = $original }
+finally {
+  $wrapperSrc = $original
+  if ($env:CHROME_FIXED_PORT_MIRROR) { Remove-Item $env:CHROME_FIXED_PORT_MIRROR -Recurse -Force -ErrorAction SilentlyContinue }
+  Remove-Item Env:\CHROME_FIXED_PORT_MIRROR -ErrorAction SilentlyContinue
+}
 Check 'the fingerprint returns to its original value' ((Get-WrapperFingerprint) -eq $a)
 
 if ($failed) { Write-Host "`n$failed test(s) failed"; exit 1 }

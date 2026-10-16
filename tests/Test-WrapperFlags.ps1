@@ -31,7 +31,7 @@ New-Item -ItemType File -Path (Join-Path $vd $MirrorSentinel) -Force | Out-Null
 . "$repo\lib\Common.ps1"
 . "$repo\lib\Wrapper.ps1"
 . "$repo\lib\Build.ps1"
-$built = New-Wrapper $ver $null
+$built = New-Wrapper
 
 $out = Join-Path $root 'out.txt'
 $env:CHROME_FIXED_PORT_MIRROR = $mir
@@ -79,13 +79,26 @@ $cases = @(
                         $l -notmatch 'CDPScreenshotNewSurface' } }
 )
 
-# Sync-PendingRename parks a new_chrome.exe in the mirror to make Chrome finish its own
-# rename. The wrapper resolves the mirror by scanning that same directory, so prove the
-# extra file does not confuse it into refusing to launch.
-Set-Content -Path (Join-Path $vd 'new_chrome.exe') -Value 'trigger' -Encoding ASCII
-$cases += @{ Name = 'a pending-rename trigger in the mirror does not break resolution'
-             Line = (Get-LaunchLine)
-             Test = { param($l) $l -match '--remote-debugging-port=9225' } }
+# Under the launch redirect Windows runs `wrapper "<path>\chrome.exe" <args>`. That path
+# is not an argument for Chrome: passed on, Chrome would open it as a URL, or treat the
+# user's own first argument as something else entirely.
+# A path with a space, so it reaches the wrapper quoted, as Windows passes it.
+$img = 'C:\Program Files\Google\Chrome\Application\' + $ChromeImage
+$cases += @(
+  @{ Name = 'the redirected image path is dropped, not handed to Chrome'
+     Line = (Get-LaunchLine @($img, '--single-argument', 'C:\f.html'))
+     Test = { param($l) $l -notmatch [regex]::Escape($img) -and $l -match '--single-argument C:\\f\.html' -and
+                        $l -match '--user-data-dir=' } }
+  @{ Name = "under the redirect, the caller's own port still wins over the default"
+     Line = (Get-LaunchLine @($img, '--remote-debugging-port=9333'))
+     Test = { param($l) $l -match '--remote-debugging-port=9333' -and $l -notmatch '9225' } }
+  @{ Name = 'a bare image name (no directory) is dropped too'
+     Line = (Get-LaunchLine @($ChromeImage, 'https://example.com/'))
+     Test = { param($l) $l -notmatch "(^| )$([regex]::Escape($ChromeImage))( |$)" -and $l -match 'https://example\.com/' } }
+  @{ Name = "a first argument that is not the image is kept (caller omitted argv0)"
+     Line = (Get-LaunchLine @('https://example.com/chrome.exe.html'))
+     Test = { param($l) $l -match 'https://example\.com/chrome\.exe\.html' } }
+)
 
 $failed = 0
 foreach ($c in $cases) {

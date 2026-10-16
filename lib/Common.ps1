@@ -67,6 +67,13 @@ function Set-FileFresh($src, $dst) {
   Copy-Item $src $dst -Force -ErrorAction Stop
 }
 
+# First 8 hex chars of SHA-256 over $text: a short, stable identity for a string.
+function Get-ShortHash([string]$text) {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { return -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))[0..3] | ForEach-Object { $_.ToString('x2') }) }
+  finally { $sha.Dispose() }
+}
+
 # The mirror's on-disk layout. ONE definition: lib/Mirror.ps1 writes it and the C#
 # wrapper is generated against it, so the two cannot describe different things. They
 # used to hold separate copies of these literals, in different languages, with only a
@@ -75,3 +82,13 @@ $MirrorRootEnv  = 'CHROME_FIXED_PORT_MIRROR'
 $MirrorRootName = 'ChromeFixedPort'
 $MirrorLauncher = 'chrome.exe'
 $MirrorSentinel = '.mirror_complete'
+
+# The image name Windows redirects to the wrapper (lib/Redirect.ps1). The wrapper is
+# generated against it too: under the redirect, Windows hands it this image's path as
+# its first argument, and the wrapper must recognise and drop exactly that token.
+$ChromeImage = 'chrome.exe'
+
+# The wrapper lives beside the mirrors, where Google's installer never writes. It used
+# to BE chrome.exe, and every Chrome update overwrote it with Google's own launcher.
+$WrapperName = 'chrome-fixed-port.exe'
+function Get-WrapperPath { Join-Path (Get-MirrorRoot) $WrapperName }

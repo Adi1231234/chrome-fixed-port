@@ -6,11 +6,12 @@
 # version directory it does not recognise as current, WITHOUT a working in-use
 # check, so we never let a browser depend on a directory Google owns: it runs
 # from a private hardlink mirror instead. Root cause and proof: README.md.
+#
+# chrome.exe stays Google's. Windows redirects every start of it to our wrapper
+# (lib/Redirect.ps1), and that redirect needs no run after a Chrome update.
 
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { '.' }
-foreach ($m in 'Common', 'Wrapper', 'Build', 'Mirror', 'Update') { . (Join-Path $here "lib\$m.ps1") }
-$optionalIcon = Join-Path $here 'lib\Get-ExeIcon.ps1'
-if (Test-Path $optionalIcon) { . $optionalIcon }
+foreach ($m in 'Common', 'Wrapper', 'Build', 'Mirror', 'Redirect', 'Legacy') { . (Join-Path $here "lib\$m.ps1") }
 
 # Identity of the wrapper build, computed from lib/Wrapper.ps1's source. Never a literal:
 # a number someone has to remember to bump is a rule with no enforcement behind it.
@@ -20,12 +21,11 @@ $dir = Get-ChromeDir
 # [IO.Path]::Combine, not Join-Path: Join-Path resolves through the PowerShell
 # provider and emits a noisy "Cannot find drive" error per call when the configured
 # directory is bad - three of them ahead of the one clean message that says why.
-$exe       = [IO.Path]::Combine($dir, 'chrome.exe')
+$exe       = [IO.Path]::Combine($dir, $ChromeImage)
 $newChrome = [IO.Path]::Combine($dir, 'new_chrome.exe')
-$marker    = [IO.Path]::Combine($dir, '.wrapper_ver')
 
 # Every genuine Chrome launcher we can currently see, as version -> path.
-# chrome_real_*.exe is both the previous design's name and our rebuild seed.
+# chrome_real_*.exe are the old design's rebuild seeds, used until they are retired.
 function Get-GenuineLaunchers($dir, $exe, $newChrome) {
   $found = @{}
   $cands = @($exe, $newChrome) + @(Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
@@ -39,15 +39,14 @@ function Get-GenuineLaunchers($dir, $exe, $newChrome) {
   return $found
 }
 
-Log "=== apply start (chrome fixed-port, mirror design) user=$env:USERNAME dir=$dir ==="
+Log "=== apply start (chrome fixed-port, launch redirect) user=$env:USERNAME dir=$dir ==="
 $code = 0; $wrap = $null
 try {
   if (-not (Test-Path $dir)) { throw "Application dir not found: $dir" }
   New-Item -ItemType Directory -Force -Path (Get-MirrorRoot) | Out-Null
 
-  # STEP 1: work out what we can serve. Candidates are the genuine launchers still
-  # in Chrome's directory PLUS any mirror we already have - in steady state Chrome's
-  # directory holds only our wrapper, so a damaged mirror is repaired from its own
+  # STEP 1: work out what we can serve: the genuine launchers in Chrome's directory
+  # PLUS any mirror we already have, so a damaged mirror is repaired from its own
   # (genuine) launcher.
   $targets = @{}
   foreach ($kv in (Get-GenuineLaunchers $dir $exe $newChrome).GetEnumerator()) { $targets[$kv.Key] = $kv.Value }
@@ -76,68 +75,27 @@ try {
     Sync-Mirror $dir $v $targets[$v] | Out-Null
   }
   if (-not (Test-Mirror $newest)) { throw "could not produce a usable mirror for $newest" }
-  $newestExe = Get-MirrorLauncher $newest
 
-  # STEP 3: build the wrapper, stamped with the version it will launch.
-  $wrap = New-Wrapper $newest $newestExe
-
-  # STEP 4: ensure chrome.exe is our current wrapper.
-  $want = "$WRAPPER_VER|$newest"
-  $needInstall = $false
-  if (-not (Test-Path $exe)) { $needInstall = $true }
-  elseif (Test-Google $exe)  { $needInstall = $true; Log 'chrome.exe is genuine (Chrome updated) - reinstalling wrapper' 'ACT' }
-  elseif ((-not (Test-Path $marker)) -or (((Get-Content $marker -Raw -ErrorAction SilentlyContinue) + '').Trim() -ne $want)) { $needInstall = $true }
-  if ($needInstall) {
-    if ((Test-Path $exe) -and (Test-Locked $exe)) { Log 'chrome.exe locked by a running browser - deferring to next run' 'WARN' }
-    else {
-      # A browser can still grab chrome.exe between the check and the copy. That
-      # must defer to the next run, not abort the cleanup steps below.
-      try {
-        Set-FileFresh $wrap.Exe $exe
-        Set-Content -Path $marker -Value $want -Encoding ASCII
-        Log "installed wrapper v$WRAPPER_VER stamped $newest at chrome.exe" 'OK'
-      }
-      catch { Log "could not install wrapper this run: $($_.Exception.Message)" 'WARN' }
-    }
+  # STEP 3: the wrapper, in our own directory. Rebuilt only when its source changed.
+  $wrapper = Get-WrapperPath
+  if (-not (Test-WrapperCurrent $WRAPPER_VER)) {
+    $wrap = New-Wrapper
+    Install-Wrapper $wrap.Exe $WRAPPER_VER
+    Log "installed wrapper v$WRAPPER_VER at $wrapper" 'OK'
   }
+  Remove-RetiredWrapper
 
-  # STEP 5: if Google staged an update, hand its swap our wrapper too, but only
-  # once that version is safely mirrored - otherwise this would destroy the only
-  # copy of a genuine launcher we had not captured yet.
-  if ((Test-Path $newChrome) -and (Test-Google $newChrome)) {
-    $ncv = Get-FileVersion $newChrome
-    if ($ncv -and (Test-Mirror $ncv)) {
-      try { Set-FileFresh $wrap.Exe $newChrome; Log "primed new_chrome.exe with wrapper (rides Google's next swap)" 'ACT' }
-      catch { Log "could not prime new_chrome.exe: $($_.Exception.Message)" 'WARN' }
-    }
-    else { Log "new_chrome.exe v$ncv is not mirrored yet - leaving it genuine this run" 'WARN' }
-  }
+  # STEP 4: send every start of Chrome's chrome.exe to it.
+  if (-not (Set-LaunchRedirect $ChromeImage $exe $wrapper)) { throw 'the launch redirect is not in place - will retry next run' }
 
-  # STEP 6: finish the update Chrome cannot finish for itself. Its rename step is
-  # gated on new_chrome.exe existing beside the RUNNING binary, which is our mirror,
-  # so it never runs - and chrome_proxy.exe rots until a PWA shortcut dies with a
-  # side-by-side error. See lib/Update.ps1.
-  Complete-ChromeUpdate $dir $newest
+  # STEP 5: undo what the old design left behind, chrome.exe included.
+  Remove-LegacyState $dir $targets
 
-  # STEP 7: drop mirrors nothing runs from any more. This is what reclaims disk:
+  # STEP 6: drop mirrors nothing runs from any more. This is what reclaims disk:
   # once Google removed its own name, our hardlink is the data's last reference.
   Remove-StaleMirror $keep
 
-  # STEP 8: keep exactly one genuine launcher beside Chrome as a rebuild seed,
-  # hardlinked from the mirror so it costs nothing. Without it the mirror's own
-  # chrome.exe is the ONLY genuine launcher on the machine, and losing it leaves
-  # the tool with nothing to rebuild from.
-  $seedName = "chrome_real_$newest.exe"
-  $seed     = Join-Path $dir $seedName
-  if (-not (Test-Path $seed)) {
-    if (New-Link $newestExe $seed) { Log "kept rebuild seed $seedName" 'ACT' }
-    else { Log "could not create rebuild seed $seedName" 'WARN' }
-  }
-  Get-ChildItem $dir -Filter 'chrome_real_*.exe' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ne $seedName -and -not (Test-Locked $_.FullName) } |
-    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; Log "retired stale launcher $($_.Name)" }
-
-  Log "state OK: wrapper at chrome.exe, mirror(s)=$((Get-MirrorVersions) -join ','), launching $newest" 'OK'
+  Log "state OK: redirect -> $wrapper, mirror(s)=$((Get-MirrorVersions) -join ','), launching $newest" 'OK'
 }
 catch { Log "FAILED: $($_.Exception.Message)" 'ERR'; $code = 1 }
 finally { if ($wrap) { Remove-Item $wrap.Tmp -Recurse -Force -ErrorAction SilentlyContinue } }

@@ -1,24 +1,25 @@
 # Project guide (for contributors and agents)
 
 A tiny tool that keeps **every** Chrome launch opening on a fixed
-`--remote-debugging-port` by replacing `chrome.exe` with a wrapper, while the
-running browser executes from a private hardlink mirror that Google's installer
-cannot reach. Read this before changing anything.
+`--remote-debugging-port`. Windows redirects every start of Chrome's own `chrome.exe`
+to a wrapper (Image File Execution Options), and the running browser executes from a
+private hardlink mirror that Google's installer cannot reach. Read this before
+changing anything.
 
 ## Layout
 
 - **`install.ps1`** - one-line bootstrap: downloads the branch archive, runs it once,
   cleans up. No scheduling - the user wires their own timer. Users never edit this.
-- **`run.ps1`** - thin orchestrator: mirror, install wrapper, finish the update, cleanup.
-- **`lib/Common.ps1`** - logging, paths, versions, the guards, and the mirror layout.
+- **`run.ps1`** - thin orchestrator: mirror, install wrapper, redirect, legacy cleanup.
+- **`lib/Common.ps1`** - logging, paths, versions, the guards, and the shared layout.
 - **`lib/Mirror.ps1`** - builds and prunes the hardlink mirror.
-- **`lib/Wrapper.ps1`** - the C# wrapper source, with the mirror layout substituted in.
-- **`lib/Build.ps1`** - the wrapper's identity (a hash of that source) and its compile.
-- **`lib/Update.ps1`** - finishes the update Chrome's own rename never gets to finish.
-- **`lib/Get-ExeIcon.ps1`** - optional: Chrome's icon. Dot-sourced if present.
+- **`lib/Wrapper.ps1`** - the C# wrapper source, with the layout substituted in.
+- **`lib/Build.ps1`** - the wrapper's identity (a hash of that source), compile, install.
+- **`lib/Redirect.ps1`** - the IFEO redirect from Chrome's `chrome.exe` to the wrapper.
+- **`lib/Legacy.ps1`** - undoes the old design, which overwrote `chrome.exe` itself.
 - **`tests/Run-All.ps1`** - every suite, one summary; a SKIP is reported like a failure.
 - **`tests/Test-*.ps1`** - one suite per contract: bootstrap completeness, wrapper
-  identity, injected flags, proxy sync, rename arming, rename safety.
+  identity, injected flags, the redirect against real Windows, legacy cleanup.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -58,10 +59,23 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 - **Only build what you keep.** Compute the keep set (newest servable version plus
   anything with a live process) *before* syncing. Building a mirror the very same
   run then prunes it is pure churn, and it never converges.
-- **Always leave one genuine launcher beside Chrome.** `chrome_real_<newest>.exe`
-  is hardlinked from the mirror, so it costs nothing and is the seed the mirror is
-  rebuilt from. Without it the mirror's own `chrome.exe` is the only genuine
-  launcher on the machine and losing it is unrecoverable.
+- **Never put the wrapper at `chrome.exe`.** That was the old design. Google's installer
+  replaces `chrome.exe` on every update - in place when nothing runs it, which is always
+  the case once the browser runs from the mirror (log: `Version updated to X` with no
+  `while running`). The wrapper was then gone until the next run. Measured 2026-10-16:
+  update at 00:01, an HTML file opened genuine Chrome on the same profile under the
+  `User Data` name, and the taskbar pin (`--user-data-dir=...ChromeDebug`) exited with
+  code 21, profile in use, showing nothing. The IFEO redirect is keyed by path in the
+  registry and survives the file being replaced; nothing needs to run after an update.
+- **The redirect is filtered to one path.** `UseFilter=1` + `FilterFullPath` redirect
+  only Chrome's Application `chrome.exe`. The mirror's `chrome.exe` shares the name but
+  not the path, so the browser and every child it spawns run untouched - an unfiltered
+  redirect would route every renderer through the wrapper. One subkey per path hash, so
+  a test or another user never overwrites this install's filter. Never `New-Item -Force`
+  an existing registry key: that recreates it and wipes other software's values.
+- **Keep `--user-data-dir` pointing at `ChromeDebug`, never at `User Data`.** Chrome 136+
+  ignores `--remote-debugging-port` on the default data directory path. `ChromeDebug` is
+  a junction to the real profile, a different path string, which is why the port works.
 - **Flags are tokens, not substrings.** The wrapper must match an argument that
   *starts with* a flag. A plain `IndexOf` lets a URL like
   `https://x/?q=--type=renderer` masquerade as a flag and silently kill the port.
@@ -74,54 +88,39 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   captures. Chromium ships it `FEATURE_DISABLED_BY_DEFAULT`, still does on trunk
   (crbug.com/377715191). Never "fix" a stall with `fromSurface:false` - while minimised
   that returns an all-white PNG. Only minimisation triggers it.
-- **Let Chrome finish its own update; cover the proxy anyway.** Chrome's rename moves
-  `new_chrome.exe` -> `chrome.exe` AND `new_chrome_proxy.exe` -> `chrome_proxy.exe`,
-  re-registers `chrome_wer.dll` and prunes old versions. It runs that step on one test,
-  pinned with six trace variants: `PathExists(base::DIR_EXE + "new_chrome.exe")` -
-  sensitive to the exact name and directory, indifferent to what it finds. `DIR_EXE` is
-  the **running** binary's directory, here the mirror, which `Sync-Mirror` never gives a
-  `new_chrome.exe`. So the step is skipped forever. `Sync-PendingRename` restores the
-  precondition so Chrome does its real rename and finalises everything, including parts
-  we do not model. **Only arm once that file is the wrapper:** the rename *moves* it
-  onto `chrome.exe`, and STEP 5 leaves it genuine while its version is unmirrored, so
-  arming then evicts the wrapper and drops the debug port. `Sync-ChromeProxy` does the
-  proxy half immediately, so nothing is exposed while waiting for that browser start.
-  Without them `chrome_proxy.exe` freezes and **every PWA shortcut dies** once Google
-  prunes the version directory its manifest names. Measured: stranded on
-  151.0.7922.109, killed 2026-08-20 21:51:12. Pruning does **not** wait for the rename
-  (`install.cc:489` runs `DeleteOldVersions` in-process on every install).
+- **Nothing may run Chrome's `chrome.exe`, so Google always updates in place.** While
+  the old wrapper held it, Google staged `new_chrome.exe` / `new_chrome_proxy.exe` for a
+  rename step gated on `PathExists(DIR_EXE + "new_chrome.exe")`; `DIR_EXE` is the mirror,
+  so it never ran, `chrome_proxy.exe` froze and **every PWA shortcut died** (measured
+  2026-08-20). With `chrome.exe` genuine and idle, Google swaps both files itself.
 - **No invariant a human must remember; derive it, do not assert it.** Three have
   bitten: `install.ps1`'s file list vs `lib/`, `$WRAPPER_VER` vs `$wrapperSrc`, and the
   mirror layout vs the C# wrapper. All three are now derived, so nothing is left to keep
   in sync: the installer ships the branch archive, the wrapper's identity hashes the
   source it compiles, and the mirror's location *and* layout - `$MirrorRootEnv`,
-  `$MirrorRootName`, `$MirrorLauncher`, `$MirrorSentinel` - live once in
-  `lib/Common.ps1` and are substituted into the C#. Finding them took a mechanical
-  sweep for literals written in two files, not judgement: the first pass missed the
-  location entirely and left `Get-MirrorLauncher` still hardcoding its own name. A test that catches divergence is
-  the weaker answer - it lets both copies live. Deleting one is the stronger one. And
-  whatever the wrapper is generated from must be what the fingerprint hashes, or a new
-  layout compiles into a wrapper the marker calls already installed.
-- **Mirror before you overwrite.** `run.ps1` STEP 1 mirrors every genuine launcher
-  it can see *before* anything replaces `chrome.exe` or `new_chrome.exe`.
+  `$MirrorRootName`, `$MirrorLauncher`, `$MirrorSentinel`, and the redirected
+  `$ChromeImage` the wrapper must drop from its arguments - live once in
+  `lib/Common.ps1` and are substituted into the C#. Find them by a mechanical sweep for
+  literals written in two files, not judgement. Deleting a copy beats a test that
+  catches divergence. Whatever the wrapper is generated from must be what the
+  fingerprint hashes, or a change compiles into a wrapper the marker calls installed.
 - **Replace files by unlinking first.** `Set-FileFresh` removes the target before
   copying. Overwriting in place writes *through* the hardlink and corrupts the
   mirror - this is the single easiest way to break this design.
-- **Stamp the wrapper.** `New-Wrapper` requires a version. An unstamped wrapper
-  reports `0.0.0.0`, excludes nothing, and leaves Chrome's own install purgeable.
 - **Fail-safe, defer don't corrupt.** A locked or missing target logs a `WARN` and
   is retried next run. Never write a partial or guessed state.
-- **Idempotent.** Re-running must converge. `.wrapper_ver` holds
-  `<wrapper fingerprint>|<stamped version>`; the fingerprint hashes `$wrapperSrc`
-  (`Get-WrapperFingerprint`), so editing the wrapper reinstalls it by itself.
+- **Idempotent.** Re-running must converge. `chrome-fixed-port.exe.ver` beside the
+  wrapper holds its fingerprint, a hash of `$wrapperSrc` (`Get-WrapperFingerprint`), so
+  editing the wrapper reinstalls it by itself. A wrapper still running a browser is
+  renamed aside (NTFS allows that for a running exe) and swept up later.
   **Never make it a literal to bump by hand** - that was the old scheme, and editing
   `$wrapperSrc` without bumping was proven to never reach Chrome at all.
-- **Cleanup is surgical.** Only ever *delete* our own mirror directories and the legacy
-  `chrome_real_*.exe`. Never delete `chrome_proxy.exe` or any other genuine Chrome file.
-  `lib/Update.ps1` holds the only sanctioned exceptions: it *replaces*
-  `chrome_proxy.exe` with Google's own staged `new_chrome_proxy.exe`, never with
-  anything we made and only after `Test-Google` passes, and it links (never moves)
-  the staged `new_chrome.exe` into the mirror.
+- **Cleanup is surgical.** Only ever *delete* our own mirror directories, retired
+  wrappers, and the old design's files (`lib/Legacy.ps1`: `chrome_real_*.exe`,
+  `.wrapper_ver`, a non-genuine `new_chrome.exe`, mirror `new_chrome.exe` triggers).
+  Never delete a genuine Chrome file. The one sanctioned replacement is a non-genuine
+  `chrome.exe`, given back to Google: only with a `Test-Google` launcher whose version
+  directory is present, never with a guess.
 - **No hardcoded user paths, no secrets.** Everything derives from `%LOCALAPPDATA%`
   or the `CHROME_FIXED_PORT_DIR` / `CHROME_FIXED_PORT_MIRROR` / `CHROME_WRAP_OVERRIDE`
   overrides.
@@ -138,6 +137,8 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 2. Seed the fake Application dir with a **genuine signed** launcher (copy one out of a
    real install, `Test-Google` must pass) and a `<version>\` directory beside it.
 3. Run `./run.ps1`, then run it **again** - the second pass must be a clean no-op.
+   It writes a real HKLM redirect for the fake path (harmless, its own subkey); remove
+   it afterwards with `Remove-LaunchRedirect 'chrome.exe' <fake>\chrome.exe`.
 4. Assert the mirror launcher is still ~4 MB and genuine. If it is wrapper-sized, some
    code overwrote a file in place and wrote through the hardlink.
 5. Delete the fake `<version>\` directory and confirm the mirror survives with content.

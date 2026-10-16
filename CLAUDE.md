@@ -18,8 +18,8 @@ changing anything.
 - **`lib/Redirect.ps1`** - the IFEO redirect from Chrome's `chrome.exe` to the wrapper.
 - **`lib/Legacy.ps1`** - undoes the old design, which overwrote `chrome.exe` itself.
 - **`tests/Run-All.ps1`** - every suite, one summary; a SKIP is reported like a failure.
-- **`tests/Test-*.ps1`** - one suite per contract: bootstrap completeness, wrapper
-  identity, injected flags, the redirect against real Windows, legacy cleanup.
+- **`tests/Test-*.ps1`** - one suite per contract: bootstrap, wrapper identity, flags,
+  the redirect against real Windows, legacy cleanup, a mirror that leaves chrome.exe free.
 - **`README.md`** - the problem, the design, the proof.
 
 ## The root cause this design exists to avoid
@@ -92,7 +92,9 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   the old wrapper held it, Google staged `new_chrome.exe` / `new_chrome_proxy.exe` for a
   rename step gated on `PathExists(DIR_EXE + "new_chrome.exe")`; `DIR_EXE` is the mirror,
   so it never ran, `chrome_proxy.exe` froze and **every PWA shortcut died** (measured
-  2026-08-20). With `chrome.exe` genuine and idle, Google swaps both files itself.
+  2026-08-20). With `chrome.exe` genuine and idle, Google swaps both files itself - so
+  the mirror's launcher is a **copy**: a hardlink is the same file, and a browser running
+  from it denies the write Google's in-use check asks for (measured, `Test-MirrorLauncher`).
 - **No invariant a human must remember; derive it, do not assert it.** Three have
   bitten: `install.ps1`'s file list vs `lib/`, `$WRAPPER_VER` vs `$wrapperSrc`, and the
   mirror layout vs the C# wrapper. All three are now derived, so nothing is left to keep
@@ -139,12 +141,10 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 3. Run `./run.ps1`, then run it **again** - the second pass must be a clean no-op.
    It writes a real HKLM redirect for the fake path (harmless, its own subkey); remove
    it afterwards with `Remove-LaunchRedirect 'chrome.exe' <fake>\chrome.exe`.
-4. Assert the mirror launcher is still ~4 MB and genuine. If it is wrapper-sized, some
-   code overwrote a file in place and wrote through the hardlink.
+4. Assert the mirror launcher is still ~4 MB, genuine, and not a hardlink.
 5. Delete the fake `<version>\` directory and confirm the mirror survives with content.
 6. To exercise the browser, set `CHROME_WRAP_OVERRIDE` to a **distinct port and a
-   throwaway `--user-data-dir`**. The default injects the real `ChromeDebug` profile
-   and will hand off to your running browser instead of testing anything.
-7. Beware the render check: creating a tab and polling for its `<title>` is **flaky in
-   headless mode** (roughly one in three fails with nothing purged). Always run the
-   no-purge control before believing a failure, and test several tabs.
+   throwaway `--user-data-dir`**; the default hands off to your real browser.
+7. Headless Chrome skips the single-instance handoff (the taskbar path) and ignores
+   `about:` URLs from the command line: test handoff headed and off-screen, with file
+   paths. Check renders by evaluating script in several new tabs, not polling titles.

@@ -72,8 +72,11 @@ directory at all.
   newest mirror, injects the debug flags, launches it, and **waits**, returning the
   browser's real exit code.
 - **The mirror** lives at `%LOCALAPPDATA%\ChromeFixedPort\<version>\` and is a
-  self-contained Chrome install built from **NTFS hardlinks**:
-  `chrome.exe` plus `<version>\`. Google's installer has never heard of this path.
+  self-contained Chrome install: `<version>\` built from **NTFS hardlinks**, plus a
+  copy of `chrome.exe`. Google's installer has never heard of this path. The launcher
+  is copied, not linked, because a link is the same file as Chrome's own `chrome.exe`:
+  a browser running from it would make Google find `chrome.exe` in use and defer its
+  update to a rename step that never runs from the mirror.
 - A hardlink is a second name for the same data. When Google unlinks its own name,
   the data survives because ours still references it. Measured: 265 links to a
   483 MB tree consumed **0.1 MB**.

@@ -1,7 +1,7 @@
 # The private mirror: a self-contained Chrome install built out of NTFS hardlinks.
 #
 # Layout, one self-contained install per version:
-#   <mirror root>\<version>\chrome.exe          hardlink to the genuine launcher
+#   <mirror root>\<version>\chrome.exe          a COPY of the genuine launcher
 #   <mirror root>\<version>\<version>\          hardlinks to Chrome's version directory
 #   <mirror root>\<version>\.mirror_complete    written ONLY after a fully successful sync
 #
@@ -9,6 +9,12 @@
 # consumed 0.1 MB), and a link keeps the file's data alive after Google's
 # installer removes its own name for it. That is what makes a running browser
 # immune to `setup.exe --delete-old-versions`.
+#
+# The launcher is the one exception. A link would be the same file as Chrome's own
+# chrome.exe, and a browser running from the mirror maps it, so Google's installer
+# would find chrome.exe in use (it asks for write access) and stage new_chrome.exe for
+# a rename step that never runs from here. Measured: linked, chrome.exe reads IN USE
+# while the mirror browser runs; copied, it stays free. 4.6 MB per version.
 
 # $MirrorLauncher / $MirrorSentinel come from lib/Common.ps1 - see the note there.
 
@@ -78,7 +84,7 @@ function Sync-Mirror($chromeDir, $version, $launcher) {
     if (New-Link $f.FullName $link) { $made++ } else { $failed++ }
   }
   if (-not (Test-Path $dstExe)) {
-    if (New-Link $launcher $dstExe) { $made++ } else { $failed++ }
+    try { Copy-Item $launcher $dstExe -ErrorAction Stop; $made++ } catch { $failed++ }
   }
 
   if ($failed) { Log "mirror $version incomplete ($failed link(s) failed) - will retry next run" 'WARN'; return $false }

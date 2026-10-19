@@ -73,6 +73,17 @@ $cases = @(
   @{ Name = 'child processes (--type=) pass through untouched'
      Line = (Get-LaunchLine @('--type=renderer'))
      Test = { param($l) $l -notmatch 'CDPScreenshotNewSurface' -and $l -match '--type=renderer' } }
+  @{ Name = 'a headless screenshot run passes through: no port, no profile'
+     Line = (Get-LaunchLine @('--headless=new', '--screenshot=shot.png', 'about:blank'))
+     Test = { param($l) $l -match '--headless=new' -and $l -match '--screenshot=shot.png' -and
+                        $l -notmatch 'remote-debugging-port' -and $l -notmatch 'ChromeDebug' -and
+                        $l -notmatch 'CDPScreenshotNewSurface' } }
+  @{ Name = 'a bare --headless passes through as well'
+     Line = (Get-LaunchLine @('--headless', 'about:blank'))
+     Test = { param($l) $l -match '--headless' -and $l -notmatch 'remote-debugging-port' } }
+  @{ Name = 'a URL that merely contains --headless is not a headless launch'
+     Line = (Get-LaunchLine @('https://x/?q=--headless'))
+     Test = { param($l) $l -match '--remote-debugging-port=9225' } }
   @{ Name = 'CHROME_WRAP_OVERRIDE still replaces the whole flag set'
      Line = (Get-LaunchLine @() '--remote-debugging-port=9999')
      Test = { param($l) $l -match '--remote-debugging-port=9999' -and

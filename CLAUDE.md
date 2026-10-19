@@ -76,6 +76,15 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
 - **Keep `--user-data-dir` pointing at `ChromeDebug`, never at `User Data`.** Chrome 136+
   ignores `--remote-debugging-port` on the default data directory path. `ChromeDebug` is
   a junction to the real profile, a different path string, which is why the port works.
+- **A headless launch gets no flags.** A script that runs `chrome --headless
+  --screenshot=...` brings everything it needs. Given the debug port, that run no
+  longer exits after the screenshot (measured: without the port it exits within
+  seconds, with it it never does), so it keeps the port for good - and as Chromium
+  binds `127.0.0.1` first and falls back to `::1`, a second browser lands on `::1`,
+  where anything connecting to `localhost` (Node resolves it to `::1` first) reaches
+  it instead of the real browser. Observed 2026-10-19: one such run held `::1:9225`
+  for 27 hours and took over an MCP's browser, a headless one with no window and no
+  profile.
 - **Flags are tokens, not substrings.** The wrapper must match an argument that
   *starts with* a flag. A plain `IndexOf` lets a URL like
   `https://x/?q=--type=renderer` masquerade as a flag and silently kill the port.

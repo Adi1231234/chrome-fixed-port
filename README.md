@@ -70,7 +70,8 @@ directory at all.
   registry, keyed by path, so a Chrome update that replaces the file does not undo it.
 - **The wrapper** (`%LOCALAPPDATA%\ChromeFixedPort\chrome-fixed-port.exe`) finds the
   newest mirror, injects the debug flags, launches it, and **waits**, returning the
-  browser's real exit code.
+  browser's real exit code. A `--headless` launch is a script's own browser and is
+  passed through untouched, like Chrome's child processes.
 - **The mirror** lives at `%LOCALAPPDATA%\ChromeFixedPort\<version>\` and is a
   self-contained Chrome install: `<version>\` built from **NTFS hardlinks**, plus a
   copy of `chrome.exe`. Google's installer has never heard of this path. The launcher

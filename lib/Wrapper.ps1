@@ -71,7 +71,11 @@ class Wrapper {
     if(real==null) return 1;
     string rest=CallerArgs();
     string args;
-    if(Has(rest,"--type=")){ args=rest; }
+    // A child process (--type=) belongs to a browser that already has its flags. A
+    // headless launch is a script's own browser: given the debug port, a --screenshot
+    // run no longer exits when it is done (measured) and holds the port from then on,
+    // on ::1 when the real browser already has 127.0.0.1 (Chromium falls back to ::1).
+    if(Has(rest,"--type=") || Has(rest,"--headless")){ args=rest; }
     else{
       string ov=Environment.GetEnvironmentVariable("CHROME_WRAP_OVERRIDE"); string flags;
       if(!string.IsNullOrEmpty(ov)){ flags=ov+" "; }

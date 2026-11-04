@@ -97,6 +97,15 @@ named after `chrome.exe`'s and `new_chrome.exe`'s `FileVersion`.
   captures. Chromium ships it `FEATURE_DISABLED_BY_DEFAULT`, still does on trunk
   (crbug.com/377715191). Never "fix" a stall with `fromSurface:false` - while minimised
   that returns an all-white PNG. Only minimisation triggers it.
+- **Keep `ForceForegroundPriorityForAllTabs` in the same `--enable-features`.** Chrome's
+  Performance Manager votes tabs in a minimised window down to `kBestEffort`, applied as
+  a `priority_override` (`RenderProcessPriority::GetProcessPriority`) that wins over
+  `--disable-renderer-backgrounding`; on Windows that is `IDLE_PRIORITY_CLASS` + EcoQoS.
+  Measured on 156.0.8078.74 under a 14-thread load, minimised window: loads 12.6-26.4 s
+  and a 60 s timeout without it, 0.48-0.50 s with it; clicks 0.9-29.7 s vs 0.5-1.1 s.
+  `PMLoadingPageVoter` fixes loads only, not clicks or scripts afterwards. A per-tab
+  boost needs an extension (`experimentalActor`) or the `ForceForegroundPriorityForUrls`
+  policy; the owner chose all tabs (2026-11-04). Upstream: crbug.com/549552319.
 - **Nothing may run Chrome's `chrome.exe`, so Google always updates in place.** While
   the old wrapper held it, Google staged `new_chrome.exe` / `new_chrome_proxy.exe` for a
   rename step gated on `PathExists(DIR_EXE + "new_chrome.exe")`; `DIR_EXE` is the mirror,

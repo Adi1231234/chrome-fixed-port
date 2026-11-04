@@ -115,8 +115,13 @@ installer gets wrong by asking only for read.
 - The wrapper also injects `--enable-features=CDPScreenshotNewSurface`. Without it, CDP
   `Page.captureScreenshot` hangs forever whenever the Chrome window is minimised -
   no error, no timeout - so any agent driving the browser stalls until you restore the
-  window. Chromium ships the fix disabled by default (crbug.com/377715191). Skipped if
-  you pass your own `--enable-features`, since Chrome honours only one such flag.
+  window. Chromium ships the fix disabled by default (crbug.com/377715191).
+- It also injects `ForceForegroundPriorityForAllTabs` into the same flag. Without it,
+  tabs in a minimised window run at Windows Idle priority with efficiency mode, and on a
+  busy CPU an agent's page loads and clicks in them take tens of seconds or time out.
+  Off by default too (crbug.com/549552319).
+- Both features are skipped if you pass your own `--enable-features`, since Chrome
+  honours only one such flag.
 - Nothing runs Chrome's `chrome.exe` any more, so Google's installer always updates
   `chrome.exe` and `chrome_proxy.exe` in place. The old design kept `chrome.exe` busy,
   which made Google defer that swap to a rename step that never ran from the mirror,

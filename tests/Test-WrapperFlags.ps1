@@ -63,9 +63,9 @@ if (-not $probe) {
 }
 
 $cases = @(
-  @{ Name = 'default launch injects the screenshot feature flag'
+  @{ Name = 'default launch injects the screenshot and tab priority features'
      Line = (Get-LaunchLine)
-     Test = { param($l) $l -match '--enable-features=CDPScreenshotNewSurface' -and
+     Test = { param($l) $l -match '--enable-features=CDPScreenshotNewSurface,ForceForegroundPriorityForAllTabs(\s|$)' -and
                         $l -match '--remote-debugging-port=9225' } }
   @{ Name = "caller's own --enable-features is left alone, not duplicated"
      Line = (Get-LaunchLine @('--enable-features=FooBar'))

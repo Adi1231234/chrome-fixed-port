@@ -86,8 +86,11 @@ class Wrapper {
         // minimised: the copy request waits for a draw or a newer surface, and a
         // minimised window gives neither. This feature allocates a LocalSurfaceId per
         // capture, the dequeue event. Off by default in Chromium (crbug.com/377715191).
+        // ForceForegroundPriorityForAllTabs: tabs in a minimised window otherwise run at
+        // Idle priority with EcoQoS, so a busy CPU stalls an agent's loads and clicks for
+        // tens of seconds (crbug.com/549552319). Off by default too.
         // Skipped if the caller brings its own --enable-features; Chrome honours one.
-        if(!Has(rest,"--enable-features")) sb.Append("--enable-features=CDPScreenshotNewSurface ");
+        if(!Has(rest,"--enable-features")) sb.Append("--enable-features=CDPScreenshotNewSurface,ForceForegroundPriorityForAllTabs ");
         if(!Has(rest,"--user-data-dir")){
           string udd=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Google\\ChromeDebug");
           sb.Append("--user-data-dir=\""+udd+"\" ");
